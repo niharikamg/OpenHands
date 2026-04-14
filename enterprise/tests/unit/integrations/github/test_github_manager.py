@@ -687,7 +687,6 @@ class TestLaminarObservability:
             init_laminar_for_external, 'return_value', mock_span_context
         )
 
-        # Reload the module to pick up the new mock
         from integrations.github import github_manager
 
         # Call start_job
