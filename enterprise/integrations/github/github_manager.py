@@ -1,3 +1,4 @@
+import os
 from contextlib import nullcontext
 from types import MappingProxyType
 
@@ -39,13 +40,42 @@ from server.utils.conversation_callback_utils import register_callback_processor
 from openhands.core.logger import openhands_logger as logger
 from openhands.integrations.provider import ProviderToken, ProviderType
 from openhands.integrations.service_types import AuthenticationError
-from openhands.sdk.observability import init_laminar_for_external
 from openhands.server.types import (
     LLMAuthenticationError,
     MissingSettingsError,
     SessionExpiredError,
 )
 from openhands.storage.data_models.secrets import Secrets
+
+
+def _should_enable_laminar_observability() -> bool:
+    observability_env_vars = (
+        'LMNR_PROJECT_API_KEY',
+        'OTEL_ENDPOINT',
+        'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
+        'OTEL_EXPORTER_OTLP_ENDPOINT',
+    )
+    return (
+        any(os.getenv(key) for key in observability_env_vars)
+        or Laminar.is_initialized()
+    )
+
+
+def init_laminar_for_external():
+    """Compatibility wrapper for the SDK helper until it is released in openhands-sdk."""
+    try:
+        from openhands.sdk.observability import (
+            init_laminar_for_external as sdk_init_laminar_for_external,
+        )
+    except ImportError:
+        from openhands.sdk.observability import maybe_init_laminar
+
+        maybe_init_laminar()
+        if _should_enable_laminar_observability():
+            return Laminar.get_laminar_span_context()
+        return None
+
+    return sdk_init_laminar_for_external()
 
 
 class GithubManager(Manager[GithubViewType]):

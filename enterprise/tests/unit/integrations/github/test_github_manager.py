@@ -600,23 +600,78 @@ class TestGetUserNotFoundMessageIntegration:
         assert "haven't created an openhands account" in message.lower()
 
 
+def test_init_laminar_for_external_falls_back_to_maybe_init_laminar(monkeypatch):
+    """Test the local compatibility wrapper when the SDK helper is unavailable."""
+    from integrations.github import github_manager
+
+    mock_observability = type(sys)('openhands.sdk.observability')
+    mock_observability.maybe_init_laminar = MagicMock()
+    monkeypatch.setitem(sys.modules, 'openhands.sdk.observability', mock_observability)
+
+    mock_laminar = MagicMock()
+    mock_laminar.is_initialized.return_value = True
+    mock_laminar.get_laminar_span_context.return_value = 'span-context'
+    monkeypatch.setattr(github_manager, 'Laminar', mock_laminar)
+
+    assert github_manager.init_laminar_for_external() == 'span-context'
+    mock_observability.maybe_init_laminar.assert_called_once()
+
+
 class TestLaminarObservability:
     """Test cases for Laminar observability integration."""
 
     @pytest.fixture(autouse=True)
-    def mock_laminar_and_observability(self, monkeypatch):
-        """Mock Laminar and SDK observability modules for all tests in this class."""
-        from unittest.mock import MagicMock
+    def mock_github_manager_dependencies(self, monkeypatch):
+        """Patch GithubManager dependencies so Laminar behavior can be tested in isolation."""
+        from integrations.github import github_manager
 
         mock_laminar = MagicMock()
-        mock_laminar.Laminar = MagicMock()
-        monkeypatch.setitem(sys.modules, 'lmnr', mock_laminar)
-
-        mock_observability = MagicMock()
-        mock_observability.init_laminar_for_external = MagicMock(return_value=None)
-        monkeypatch.setitem(
-            sys.modules, 'openhands.sdk.observability', mock_observability
+        mock_laminar.is_initialized.return_value = False
+        mock_laminar.get_laminar_span_context.return_value = None
+        monkeypatch.setattr(github_manager, 'Laminar', mock_laminar)
+        monkeypatch.setattr(github_manager, 'Auth', MagicMock())
+        monkeypatch.setattr(github_manager, 'GithubIntegration', MagicMock())
+        monkeypatch.setattr(
+            github_manager,
+            'get_saas_user_auth',
+            AsyncMock(return_value=MagicMock()),
         )
+        monkeypatch.setattr(github_manager, 'register_callback_processor', MagicMock())
+        monkeypatch.setattr(github_manager, 'ENABLE_SOLVABILITY_ANALYSIS', False)
+
+        mock_init_laminar_for_external = MagicMock(return_value=None)
+        monkeypatch.setattr(
+            github_manager,
+            'init_laminar_for_external',
+            mock_init_laminar_for_external,
+        )
+
+        mock_callback_module = type(sys)(
+            'server.conversation_callback_processor.github_callback_processor'
+        )
+        mock_callback_module.GithubCallbackProcessor = MagicMock(
+            return_value=MagicMock()
+        )
+        monkeypatch.setitem(
+            sys.modules,
+            'server.conversation_callback_processor.github_callback_processor',
+            mock_callback_module,
+        )
+
+        return {
+            'github_manager': github_manager,
+            'laminar': mock_laminar,
+            'init_laminar_for_external': mock_init_laminar_for_external,
+        }
+
+    @pytest.fixture
+    def manager(self, mock_token_manager, mock_data_collector):
+        """Create a GithubManager with outbound messaging mocked."""
+        from integrations.github import github_manager
+
+        manager = github_manager.GithubManager(mock_token_manager, mock_data_collector)
+        manager.send_message = AsyncMock()
+        return manager
 
     @pytest.fixture
     def mock_token_manager(self):
@@ -668,41 +723,35 @@ class TestLaminarObservability:
 
     @pytest.mark.asyncio
     async def test_laminar_span_created_with_metadata_when_enabled(
-        self, mock_token_manager, mock_data_collector, mock_github_view, monkeypatch
+        self,
+        manager,
+        mock_github_view,
+        mock_github_manager_dependencies,
     ):
         """Test that Laminar span is created with correct metadata when Laminar is enabled."""
-        from lmnr import Laminar
-
-        # Set up Laminar mock to return a span context
         mock_span = MagicMock()
         mock_span.__enter__ = MagicMock(return_value=mock_span)
         mock_span.__exit__ = MagicMock(return_value=False)
         mock_span_context = MagicMock()
-        mock_span_context.__enter__ = MagicMock(return_value=mock_span)
-        mock_span_context.__exit__ = MagicMock(return_value=False)
-        Laminar.start_as_current_span.return_value = mock_span
 
-        # Set up init_laminar_for_external to return a span context (enabled)
-        from openhands.sdk.observability import init_laminar_for_external
+        mock_github_manager_dependencies[
+            'laminar'
+        ].start_as_current_span.return_value = mock_span
+        mock_github_manager_dependencies[
+            'init_laminar_for_external'
+        ].return_value = mock_span_context
 
-        monkeypatch.setattr(
-            init_laminar_for_external, 'return_value', mock_span_context
-        )
-
-        from integrations.github import github_manager
-
-        # Call start_job
-        manager = github_manager.GithubManager(mock_token_manager, mock_data_collector)
         await manager.start_job(mock_github_view)
 
-        # Verify Laminar.start_as_current_span was called with correct name
-        Laminar.start_as_current_span.assert_called_once()
-        call_kwargs = Laminar.start_as_current_span.call_args.kwargs
-        assert call_kwargs['name'] == 'github-resolver'
-        assert call_kwargs['parent_span_context'] == mock_span_context
-
-        # Verify trace metadata was set
-        Laminar.set_trace_metadata.assert_called_once_with(
+        mock_github_manager_dependencies[
+            'laminar'
+        ].start_as_current_span.assert_called_once_with(
+            name='github-resolver',
+            parent_span_context=mock_span_context,
+        )
+        mock_github_manager_dependencies[
+            'laminar'
+        ].set_trace_metadata.assert_called_once_with(
             {
                 'source': 'github',
                 'repo': 'test-owner/test-repo',
@@ -711,102 +760,80 @@ class TestLaminarObservability:
                 'conversation_id': 'conv-123',
             }
         )
-
-        # Verify conversation was created
         mock_github_view.create_new_conversation.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_conversation_created_when_laminar_disabled(
-        self, mock_token_manager, mock_data_collector, mock_github_view, monkeypatch
+        self,
+        manager,
+        mock_github_view,
+        mock_github_manager_dependencies,
     ):
-        """Test that conversation is created when Laminar is disabled (returns None)."""
-        from lmnr import Laminar
+        """Test that conversation is created when Laminar is disabled."""
+        mock_github_manager_dependencies[
+            'init_laminar_for_external'
+        ].return_value = None
 
-        from openhands.sdk.observability import init_laminar_for_external
-
-        # Ensure init_laminar_for_external returns None (disabled)
-        monkeypatch.setattr(init_laminar_for_external, 'return_value', None)
-
-        from integrations.github import github_manager
-
-        # Call start_job
-        manager = github_manager.GithubManager(mock_token_manager, mock_data_collector)
         await manager.start_job(mock_github_view)
 
-        # Verify Laminar.start_as_current_span was NOT called
-        Laminar.start_as_current_span.assert_not_called()
-
-        # Verify conversation was still created
+        mock_github_manager_dependencies[
+            'laminar'
+        ].start_as_current_span.assert_not_called()
         mock_github_view.create_new_conversation.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_conversation_created_when_laminar_span_setup_fails(
-        self, mock_token_manager, mock_data_collector, mock_github_view, monkeypatch
+        self,
+        manager,
+        mock_github_view,
+        mock_github_manager_dependencies,
     ):
         """Test that conversation is created even when Laminar span setup fails."""
-        from lmnr import Laminar
+        mock_github_manager_dependencies[
+            'init_laminar_for_external'
+        ].return_value = MagicMock()
+        mock_github_manager_dependencies[
+            'laminar'
+        ].start_as_current_span.side_effect = RuntimeError('Laminar unavailable')
 
-        from openhands.sdk.observability import init_laminar_for_external
-
-        # Set up init_laminar_for_external to return a span context (enabled)
-        mock_span_context = MagicMock()
-        monkeypatch.setattr(
-            init_laminar_for_external, 'return_value', mock_span_context
-        )
-
-        # Make Laminar.start_as_current_span raise an exception
-        Laminar.start_as_current_span.side_effect = RuntimeError('Laminar unavailable')
-
-        from integrations.github import github_manager
-
-        # Call start_job - should NOT raise
-        manager = github_manager.GithubManager(mock_token_manager, mock_data_collector)
         await manager.start_job(mock_github_view)
 
-        # Verify conversation was still created despite Laminar failure
         mock_github_view.create_new_conversation.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_laminar_flush_called_when_enabled(
-        self, mock_token_manager, mock_data_collector, mock_github_view, monkeypatch
+        self,
+        manager,
+        mock_github_view,
+        mock_github_manager_dependencies,
     ):
         """Test that Laminar.flush() is called when Laminar is enabled."""
-        from lmnr import Laminar
+        mock_span = MagicMock()
+        mock_span.__enter__ = MagicMock(return_value=mock_span)
+        mock_span.__exit__ = MagicMock(return_value=False)
+        mock_github_manager_dependencies[
+            'laminar'
+        ].start_as_current_span.return_value = mock_span
+        mock_github_manager_dependencies[
+            'init_laminar_for_external'
+        ].return_value = MagicMock()
 
-        from openhands.sdk.observability import init_laminar_for_external
-
-        # Set up init_laminar_for_external to return a span context (enabled)
-        mock_span_context = MagicMock()
-        monkeypatch.setattr(
-            init_laminar_for_external, 'return_value', mock_span_context
-        )
-
-        from integrations.github import github_manager
-
-        # Call start_job
-        manager = github_manager.GithubManager(mock_token_manager, mock_data_collector)
         await manager.start_job(mock_github_view)
 
-        # Verify Laminar.flush was called
-        Laminar.flush.assert_called_once()
+        mock_github_manager_dependencies['laminar'].flush.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_laminar_flush_not_called_when_disabled(
-        self, mock_token_manager, mock_data_collector, mock_github_view, monkeypatch
+        self,
+        manager,
+        mock_github_view,
+        mock_github_manager_dependencies,
     ):
         """Test that Laminar.flush() is NOT called when Laminar is disabled."""
-        from lmnr import Laminar
+        mock_github_manager_dependencies[
+            'init_laminar_for_external'
+        ].return_value = None
 
-        from openhands.sdk.observability import init_laminar_for_external
-
-        # Ensure init_laminar_for_external returns None (disabled)
-        monkeypatch.setattr(init_laminar_for_external, 'return_value', None)
-
-        from integrations.github import github_manager
-
-        # Call start_job
-        manager = github_manager.GithubManager(mock_token_manager, mock_data_collector)
         await manager.start_job(mock_github_view)
 
-        # Verify Laminar.flush was NOT called
-        Laminar.flush.assert_not_called()
+        mock_github_manager_dependencies['laminar'].flush.assert_not_called()
