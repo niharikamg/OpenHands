@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { openHands } from "#/api/open-hands-axios";
 import { displayErrorToast } from "#/utils/custom-toast-handlers";
@@ -14,6 +14,7 @@ interface OnboardingResponse {
 
 export const useSubmitOnboarding = () => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async ({ selections }: SubmitOnboardingArgs) => {
@@ -24,6 +25,8 @@ export const useSubmitOnboarding = () => {
       return data;
     },
     onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+
       const finalRedirectUrl = data.redirect_url || "/";
       // Check if the redirect URL is an external URL (starts with http or https)
       if (

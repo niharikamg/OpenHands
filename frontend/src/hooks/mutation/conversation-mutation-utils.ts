@@ -1,22 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
-import { Provider } from "#/types/settings";
-import ConversationService from "#/api/conversation-service/conversation-service.api";
 import V1ConversationService from "#/api/conversation-service/v1-conversation-service.api";
 import { SandboxService } from "#/api/sandbox-service/sandbox-service.api";
-
-/**
- * Gets the conversation version from the cache
- */
-export const getConversationVersionFromQueryCache = (
-  queryClient: QueryClient,
-  conversationId: string,
-): "V0" | "V1" => {
-  const conversation = queryClient.getQueryData<{
-    conversation_version?: string;
-  }>(["user", "conversation", conversationId]);
-
-  return conversation?.conversation_version === "V1" ? "V1" : "V0";
-};
 
 /**
  * Fetches a V1 conversation's sandbox_id and conversation_url
@@ -66,10 +50,21 @@ export const pauseV1Conversation = async (conversationId: string) => {
 };
 
 /**
- * Stops a V0 conversation using the legacy API
+ * Ask the agent a side question on a V1 conversation
  */
-export const stopV0Conversation = async (conversationId: string) =>
-  ConversationService.stopConversation(conversationId);
+export const askV1Agent = async (
+  conversationId: string,
+  question: string,
+): Promise<{ response: string }> => {
+  const { conversationUrl, sessionApiKey } =
+    await fetchV1ConversationData(conversationId);
+  return V1ConversationService.askAgent(
+    conversationId,
+    conversationUrl,
+    question,
+    sessionApiKey,
+  );
+};
 
 /**
  * Resumes a V1 conversation sandbox by fetching the sandbox_id and resuming it
@@ -93,26 +88,24 @@ export const resumeV1Conversation = async (conversationId: string) => {
 };
 
 /**
- * Starts a V0 conversation using the legacy API
- */
-export const startV0Conversation = async (
-  conversationId: string,
-  providers?: Provider[],
-) => ConversationService.startConversation(conversationId, providers);
-
-/**
  * Optimistically updates the conversation status in the cache
  */
-export const updateConversationStatusInCache = (
+export const updateConversationSandboxStatusInCache = (
   queryClient: QueryClient,
   conversationId: string,
-  status: string,
+  sandbox_status: string,
 ): void => {
   // Update the individual conversation cache
   queryClient.setQueryData<{ status: string }>(
     ["user", "conversation", conversationId],
     (oldData) => {
       if (!oldData) return oldData;
+      let status = sandbox_status;
+      if (status === "PAUSED") {
+        status = "STOPPED";
+      } else if (status === "MISSING") {
+        status = "ARCHIVED";
+      }
       return { ...oldData, status };
     },
   );
@@ -120,7 +113,7 @@ export const updateConversationStatusInCache = (
   // Update the conversations list cache
   queryClient.setQueriesData<{
     pages: Array<{
-      results: Array<{ conversation_id: string; status: string }>;
+      items: Array<{ id: string; sandbox_status: string }>;
     }>;
   }>({ queryKey: ["user", "conversations"] }, (oldData) => {
     if (!oldData) return oldData;
@@ -129,8 +122,8 @@ export const updateConversationStatusInCache = (
       ...oldData,
       pages: oldData.pages.map((page) => ({
         ...page,
-        results: page.results.map((conv) =>
-          conv.conversation_id === conversationId ? { ...conv, status } : conv,
+        items: page.items.map((conv) =>
+          conv.id === conversationId ? { ...conv, sandbox_status } : conv,
         ),
       })),
     };
