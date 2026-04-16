@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import BackgroundTasks
 from integrations.slack.slack_manager import (
+    SLACK_FORM_INTERACTION_EXPIRATION,
+    SLACK_FORM_INTERACTION_KEY_PREFIX,
     SLACK_USER_MSG_EXPIRATION,
     SLACK_USER_MSG_KEY_PREFIX,
     SlackManager,
@@ -206,6 +208,7 @@ class TestRepoVerificationHandling:
         mock_sio.manager.redis = mock_redis
         stored_msg = json.dumps({'text': 'Hello, help me with code', 'user': 'U123'})
         mock_redis.get = AsyncMock(return_value=stored_msg)
+        mock_redis.set = AsyncMock(return_value=True)
 
         # Simulate button click payload (what Slack sends when button is clicked)
         button_payload = {
@@ -218,15 +221,30 @@ class TestRepoVerificationHandling:
                 }
             ],
             'user': {'id': 'U123'},
-            'container': {'channel_id': 'C123'},
+            'container': {'channel_id': 'C123', 'message_ts': 'selector.123'},
             'team': {'id': 'T123'},
         }
 
         # Mock receive_message to capture what's passed to it
-        with patch.object(
-            slack_manager, 'receive_message', new_callable=AsyncMock
-        ) as mock_receive:
+        with (
+            patch.object(
+                slack_manager, 'receive_message', new_callable=AsyncMock
+            ) as mock_receive,
+            patch.object(
+                slack_manager,
+                '_disable_repo_selection_controls',
+                new_callable=AsyncMock,
+            ) as mock_disable_controls,
+        ):
             await slack_manager.receive_form_interaction(button_payload)
+
+            mock_redis.set.assert_awaited_once_with(
+                f'{SLACK_FORM_INTERACTION_KEY_PREFIX}:1234567890.123456:None',
+                1,
+                nx=True,
+                ex=SLACK_FORM_INTERACTION_EXPIRATION,
+            )
+            mock_disable_controls.assert_awaited_once_with(button_payload, None)
 
             # Verify receive_message was called
             mock_receive.assert_called_once()
@@ -236,6 +254,49 @@ class TestRepoVerificationHandling:
             assert call_args.message['selected_repo'] is None
             assert call_args.message['message_ts'] == '1234567890.123456'
             assert call_args.message['thread_ts'] is None
+
+    @pytest.mark.asyncio
+    @patch('integrations.slack.slack_manager.sio')
+    async def test_duplicate_form_interaction_is_ignored(
+        self,
+        mock_sio,
+        slack_manager,
+    ):
+        """Test that duplicate repo selection interactions do not start twice."""
+        mock_redis = AsyncMock()
+        mock_sio.manager.redis = mock_redis
+        mock_redis.set = AsyncMock(return_value=False)
+        mock_redis.get = AsyncMock()
+
+        button_payload = {
+            'type': 'block_actions',
+            'actions': [
+                {
+                    'action_id': 'no_repository:1234567890.123456:None',
+                    'type': 'button',
+                    'value': '-',
+                }
+            ],
+            'user': {'id': 'U123'},
+            'container': {'channel_id': 'C123', 'message_ts': 'selector.123'},
+            'team': {'id': 'T123'},
+        }
+
+        with (
+            patch.object(
+                slack_manager,
+                '_disable_repo_selection_controls',
+                new_callable=AsyncMock,
+            ) as mock_disable_controls,
+            patch.object(
+                slack_manager, 'receive_message', new_callable=AsyncMock
+            ) as mock_receive_message,
+        ):
+            await slack_manager.receive_form_interaction(button_payload)
+
+        mock_disable_controls.assert_not_awaited()
+        mock_receive_message.assert_not_called()
+        mock_redis.get.assert_not_called()
 
     @patch('integrations.slack.slack_manager.sio')
     @patch('integrations.slack.slack_manager.ProviderHandler')
@@ -314,6 +375,18 @@ class TestBuildRepoOptions:
         assert len(options) == 2
         assert options[0]['value'] == 'owner/repo1'
         assert options[1]['value'] == 'owner/repo2'
+
+    def test_build_repo_selection_submitted_message_removes_controls(
+        self, slack_manager
+    ):
+        """Test submitted repo selection message no longer includes interactive controls."""
+        message = slack_manager._build_repo_selection_submitted_message(None)
+
+        assert message['text'] == 'Repository selection submitted.'
+        assert all(block['type'] != 'actions' for block in message['blocks'])
+        assert (
+            'Continuing without a repository' in message['blocks'][-1]['text']['text']
+        )
 
     def test_build_options_empty_repos(self, slack_manager):
         """Test building options with empty repo list returns empty list.

@@ -57,6 +57,9 @@ SLACK_USER_MSG_KEY_PREFIX = 'slack_user_msg'
 # Expiration time for stored user messages (5 minutes)
 # Arbitrary timeout based on typical user attention span; may be tuned based on feedback
 SLACK_USER_MSG_EXPIRATION = 300
+# Key prefix for deduplicating repository selection form submissions
+SLACK_FORM_INTERACTION_KEY_PREFIX = 'slack_form_interaction'
+SLACK_FORM_INTERACTION_EXPIRATION = 300
 
 
 class SlackManager(Manager[SlackViewInterface]):
@@ -323,6 +326,124 @@ class SlackManager(Manager[SlackViewInterface]):
             for repo in repos[:100]
         ]
 
+    def _build_repo_selection_submitted_message(
+        self, selected_repository: str | None
+    ) -> dict[str, Any]:
+        """Build a non-interactive repo selection message after submission."""
+        status_text = (
+            ':white_check_mark: Continuing without a repository. Starting OpenHands...'
+            if selected_repository is None
+            else f':white_check_mark: Selected repository `{selected_repository}`. Starting OpenHands...'
+        )
+
+        return {
+            'text': 'Repository selection submitted.',
+            'blocks': [
+                {
+                    'type': 'header',
+                    'text': {
+                        'type': 'plain_text',
+                        'text': 'Choose a repository',
+                        'emoji': True,
+                    },
+                },
+                {
+                    'type': 'section',
+                    'text': {
+                        'type': 'mrkdwn',
+                        'text': 'Select a repository or continue without one:',
+                    },
+                },
+                {
+                    'type': 'section',
+                    'text': {
+                        'type': 'mrkdwn',
+                        'text': status_text,
+                    },
+                },
+            ],
+        }
+
+    async def _disable_repo_selection_controls(
+        self, slack_payload: dict[str, Any], selected_repository: str | None
+    ) -> None:
+        """Replace the interactive repo selector with a submitted status message."""
+        selector_message_ts = slack_payload.get('container', {}).get('message_ts')
+        if not selector_message_ts:
+            logger.warning(
+                'slack_disable_repo_selection_missing_message_ts',
+                extra={'payload_keys': list(slack_payload.keys())},
+            )
+            return
+
+        slack_view = await SlackMessageView.from_payload(
+            slack_payload, self._get_slack_team_store()
+        )
+        if not slack_view:
+            logger.warning(
+                'slack_disable_repo_selection_missing_view',
+                extra={'payload_keys': list(slack_payload.keys())},
+            )
+            return
+
+        updated_message = self._build_repo_selection_submitted_message(
+            selected_repository
+        )
+
+        try:
+            client = AsyncWebClient(token=slack_view.bot_access_token)
+            await client.chat_update(
+                channel=slack_view.channel_id,
+                ts=selector_message_ts,
+                text=updated_message['text'],
+                blocks=updated_message['blocks'],
+            )
+        except Exception as e:
+            logger.warning(
+                'slack_disable_repo_selection_failed',
+                extra={
+                    'error': str(e),
+                    'channel_id': slack_view.channel_id,
+                    'message_ts': selector_message_ts,
+                    'selected_repository': selected_repository,
+                },
+            )
+
+    async def _claim_form_interaction(
+        self, message_ts: str, thread_ts: str | None
+    ) -> bool:
+        """Claim a repo selection form submission, ignoring duplicates."""
+        interaction_key = (
+            f'{SLACK_FORM_INTERACTION_KEY_PREFIX}:{message_ts}:{thread_ts}'
+        )
+
+        try:
+            created = await sio.manager.redis.set(
+                interaction_key,
+                1,
+                nx=True,
+                ex=SLACK_FORM_INTERACTION_EXPIRATION,
+            )
+        except Exception as e:
+            logger.warning(
+                'slack_form_interaction_claim_failed',
+                extra={
+                    'error': str(e),
+                    'message_ts': message_ts,
+                    'thread_ts': thread_ts,
+                },
+            )
+            return True
+
+        if not created:
+            logger.info(
+                'slack_form_interaction_duplicate',
+                extra={'message_ts': message_ts, 'thread_ts': thread_ts},
+            )
+            return False
+
+        return True
+
     async def search_repos_for_slack(
         self, user_auth: UserAuth, query: str, per_page: int = 20
     ) -> list[dict[str, Any]]:
@@ -444,6 +565,11 @@ class SlackManager(Manager[SlackViewInterface]):
 
         # Convert "-" (No Repository) to None
         selected_repository = None if selected_value == '-' else selected_value
+
+        if not await self._claim_form_interaction(message_ts, thread_ts):
+            return
+
+        await self._disable_repo_selection_controls(slack_payload, selected_repository)
 
         # Retrieve the original user message from Redis
         try:
