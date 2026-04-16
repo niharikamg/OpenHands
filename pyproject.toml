@@ -34,7 +34,7 @@ dependencies = [
   "dirhash",
   "docker",
   "fastapi",
-  "fastmcp>=3,<4",
+  "fastmcp>=3.2,<4",
   "google-api-python-client>=2.164",
   "google-auth-httplib2",
   "google-auth-oauthlib",
@@ -57,9 +57,9 @@ dependencies = [
   "numpy",
   "openai==2.8",
   "openhands-aci==0.3.3",
-  "openhands-agent-server==1.16.1",
-  "openhands-sdk==1.16.1",
-  "openhands-tools==1.16.1",
+  "openhands-agent-server==1.17",
+  "openhands-sdk==1.17",
+  "openhands-tools==1.17",
   "opentelemetry-api>=1.33.1",
   "opentelemetry-exporter-otlp-proto-grpc>=1.33.1",
   "orjson>=3.11.6",
@@ -68,7 +68,7 @@ dependencies = [
   "pg8000>=1.31.5",
   "pillow>=12.1.1",
   "playwright>=1.55",
-  "poetry>=2.1.2",
+  "poetry>=2.3.3",
   "prompt-toolkit>=3.0.50",
   "protobuf>=5.29.6,<6",
   "psutil",
@@ -209,10 +209,10 @@ sse-starlette = "^3.0.2"
 psutil = "*"
 python-json-logger = ">=3.2.1,<5.0.0"
 prompt-toolkit = "^3.0.50"
-poetry = "^2.1.2"
+poetry = "^2.3.3"
 anyio = "4.9.0"
 pythonnet = { version = "*", markers = "sys_platform == 'win32'" }
-fastmcp = ">=3,<4"
+fastmcp = ">=3.2,<4"
 python-frontmatter = "^1.1.0"
 shellingham = "^1.5.4"
 # TODO: Should these go into the runtime group?
@@ -251,9 +251,9 @@ e2b-code-interpreter = { version = "^2.0.0", optional = true }
 pybase62 = "^1.0.0"
 
 # V1 dependencies
-openhands-sdk = "1.16.1"
-openhands-agent-server = "1.16.1"
-openhands-tools = "1.16.1"
+openhands-sdk = "1.17.0"
+openhands-agent-server = "1.17.0"
+openhands-tools = "1.17.0"
 jwcrypto = ">=1.5.6"
 sqlalchemy = { extras = [ "asyncio" ], version = "^2.0.40" }
 pg8000 = "^1.31.5"
