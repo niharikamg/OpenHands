@@ -39,7 +39,6 @@ from openhands.server.user_auth import (
     get_provider_tokens,
     get_secrets,
     get_secrets_store,
-    get_user_id,
 )
 from openhands.storage.data_models.secrets import Secrets
 from openhands.storage.data_models.settings import Settings
