@@ -622,7 +622,7 @@ describe("LlmSettingsScreen", () => {
     });
   });
 
-  it("resets hidden advanced and all settings back to defaults when saving basic view", async () => {
+  it("omits hidden schema-driven advanced and all settings when saving basic view", async () => {
     const schema = structuredClone(
       MOCK_DEFAULT_USER_SETTINGS.agent_settings_schema!,
     );
@@ -710,12 +710,18 @@ describe("LlmSettingsScreen", () => {
             llm: expect.objectContaining({
               api_key: "test-api-key",
               base_url: "https://schema.default/v1",
-              timeout: 30,
             }),
           }),
         }),
       );
     });
+
+    const payload = saveSettingsSpy.mock.calls[0][0] as {
+      agent_settings?: {
+        llm?: Record<string, unknown>;
+      };
+    };
+    expect(payload.agent_settings?.llm).not.toHaveProperty("timeout");
   });
 
   it("preserves hidden search API key state when saving basic view", async () => {

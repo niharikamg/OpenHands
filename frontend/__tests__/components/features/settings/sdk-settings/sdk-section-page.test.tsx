@@ -599,6 +599,83 @@ describe("SdkSectionPage", () => {
     });
   });
 
+  it("omits hidden detailed fields when saving after switching back to the basic view", async () => {
+    vi.spyOn(SettingsService, "getSettings").mockResolvedValue(
+      buildSettings({
+        agent_settings_schema: {
+          model_name: "AgentSettings",
+          sections: [
+            {
+              key: "llm",
+              label: "LLM",
+              fields: [
+                {
+                  key: "llm.endpoint",
+                  label: "Endpoint",
+                  section: "llm",
+                  section_label: "LLM",
+                  value_type: "string",
+                  default: "https://api.example.com",
+                  choices: [],
+                  depends_on: [],
+                  prominence: "critical",
+                  secret: false,
+                  required: true,
+                },
+                {
+                  key: "llm.timeout",
+                  label: "Timeout",
+                  section: "llm",
+                  section_label: "LLM",
+                  value_type: "integer",
+                  default: 30,
+                  choices: [],
+                  depends_on: [],
+                  prominence: "major",
+                  secret: false,
+                  required: false,
+                },
+              ],
+            },
+          ],
+        },
+        agent_settings: {
+          llm: {
+            endpoint: "https://api.example.com",
+            timeout: 45,
+          },
+        },
+      }),
+    );
+    const saveSettingsSpy = vi
+      .spyOn(SettingsService, "saveSettings")
+      .mockResolvedValue(true);
+
+    renderSdkSectionPage({ sectionKeys: ["llm"] });
+
+    await userEvent.click(await screen.findByTestId("sdk-section-advanced-toggle"));
+    const timeoutInput = await screen.findByTestId("sdk-settings-llm.timeout");
+    await userEvent.clear(timeoutInput);
+    await userEvent.type(timeoutInput, "90");
+
+    await userEvent.click(screen.getByTestId("sdk-section-basic-toggle"));
+    const endpointInput = await screen.findByTestId("sdk-settings-llm.endpoint");
+    await userEvent.clear(endpointInput);
+    await userEvent.type(endpointInput, "https://api.changed.example.com");
+    await userEvent.click(screen.getByTestId("save-button"));
+
+    await waitFor(() => {
+      expect(saveSettingsSpy).toHaveBeenCalledWith({
+        agent_settings: {
+          llm: {
+            endpoint: "https://api.changed.example.com",
+          },
+        },
+      });
+    });
+  });
+
+
   it("allows saving custom payloads when only external state is dirty", async () => {
     vi.spyOn(SettingsService, "getSettings").mockResolvedValue(buildSettings());
     const saveSettingsSpy = vi

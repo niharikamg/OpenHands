@@ -462,8 +462,6 @@ export function LlmSettingsScreen({
       const agentSettings = structuredClone(basePayload);
       const topLevel: Record<string, unknown> = {};
 
-      delete (agentSettings as Record<string, unknown>).mcp_config;
-
       if (!isSaasMode && searchApiKeyDirty) {
         topLevel.search_api_key = searchApiKey.trim();
       }
