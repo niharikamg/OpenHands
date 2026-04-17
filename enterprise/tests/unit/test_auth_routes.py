@@ -534,6 +534,7 @@ async def test_keycloak_callback_redirects_to_keycloak_when_offline_token_invali
         patch('server.routes.auth.KEYCLOAK_CLIENT_ID', 'test-client'),
         patch('server.routes.auth.UserStore') as mock_user_store,
         patch('server.routes.auth.get_analytics_service'),
+        patch('storage.org_store.OrgStore.get_org_by_id', new_callable=AsyncMock),
         patch('server.routes.auth.OrgInvitationService') as mock_invitation_service,
         patch(
             'server.routes.auth._should_redirect_to_onboarding',
