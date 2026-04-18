@@ -215,6 +215,12 @@ function MCPSettingsScreen() {
         </BrandButton>
       </div>
 
+      <MCPServerList
+        servers={allServers}
+        onEdit={handleEditClick}
+        onDelete={handleDeleteClick}
+      />
+
       {!isSaasMode ? (
         <section
           data-testid="mcp-search-settings-section"
@@ -271,12 +277,6 @@ function MCPSettingsScreen() {
           </div>
         </section>
       ) : null}
-
-      <MCPServerList
-        servers={allServers}
-        onEdit={handleEditClick}
-        onDelete={handleDeleteClick}
-      />
 
       {confirmationModalIsVisible && serverToDelete && (
         <ConfirmationModal
