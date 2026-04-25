@@ -92,6 +92,8 @@ export default defineConfig(({ mode }) => {
         "i18next-browser-languagedetector",
         "react-i18next",
         "axios",
+        "prop-types",
+        "react-is",
         "@uidotdev/usehooks",
         "react-icons/fa6",
         "react-icons/fa",
@@ -101,6 +103,9 @@ export default defineConfig(({ mode }) => {
         "lucide-react",
         "@microlink/react-json-view",
         "socket.io-client",
+        "@mswjs/socket.io-binding",
+        "socket.io-parser",
+        "engine.io-parser",
         // These are discovered when launching conversations:
         "react-icons/vsc",
         "react-icons/lu",
