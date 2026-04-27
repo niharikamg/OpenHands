@@ -511,6 +511,27 @@ class RemoteSandboxService(SandboxService):
         # Fallback for sandboxes created before the hash column was added
         return await self._get_sandbox_by_session_api_key_legacy(session_api_key)
 
+    async def check_concurrency_limit(self) -> None:
+        """Check if the user has reached their concurrent sandbox limit.
+
+        This check is performed synchronously before creating a task to allow
+        the API to return a 429 error immediately instead of failing asynchronously.
+
+        Raises:
+            ConcurrencyLimitError: If the user has reached their limit
+        """
+        from openhands.app_server.errors import ConcurrencyLimitError
+
+
+        effective_limit = await self._get_user_effective_sandbox_limit()
+        current_count = await self._count_user_running_sandboxes()
+
+        if current_count >= effective_limit:
+            _logger.info(
+                f'User has reached sandbox limit: {current_count}/{effective_limit}'
+            )
+            raise ConcurrencyLimitError(limit=effective_limit, current=current_count)
+
     async def start_sandbox(
         self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None
     ) -> SandboxInfo:

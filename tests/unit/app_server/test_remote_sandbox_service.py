@@ -1491,3 +1491,66 @@ class TestConcurrencyLimits:
             pass  # Expected
         except SandboxError:
             pytest.fail('ConcurrencyLimitError should not be wrapped in SandboxError')
+
+    @pytest.mark.asyncio
+    async def test_check_concurrency_limit_raises_when_at_limit(
+        self, remote_sandbox_service
+    ):
+        """Test that check_concurrency_limit raises ConcurrencyLimitError when at limit."""
+        from openhands.app_server.errors import ConcurrencyLimitError
+
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=3
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=3)
+
+        with pytest.raises(ConcurrencyLimitError) as exc_info:
+            await remote_sandbox_service.check_concurrency_limit()
+
+        assert exc_info.value.detail['limit'] == 3
+        assert exc_info.value.detail['current'] == 3
+        assert exc_info.value.status_code == 429
+
+    @pytest.mark.asyncio
+    async def test_check_concurrency_limit_raises_when_over_limit(
+        self, remote_sandbox_service
+    ):
+        """Test that check_concurrency_limit raises ConcurrencyLimitError when over limit."""
+        from openhands.app_server.errors import ConcurrencyLimitError
+
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=5
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=7)
+
+        with pytest.raises(ConcurrencyLimitError) as exc_info:
+            await remote_sandbox_service.check_concurrency_limit()
+
+        assert exc_info.value.detail['limit'] == 5
+        assert exc_info.value.detail['current'] == 7
+
+    @pytest.mark.asyncio
+    async def test_check_concurrency_limit_succeeds_when_under_limit(
+        self, remote_sandbox_service
+    ):
+        """Test that check_concurrency_limit succeeds when under limit."""
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=5
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=2)
+
+        # Should not raise
+        await remote_sandbox_service.check_concurrency_limit()
+
+    @pytest.mark.asyncio
+    async def test_check_concurrency_limit_succeeds_when_well_under_limit(
+        self, remote_sandbox_service
+    ):
+        """Test that check_concurrency_limit succeeds when well under limit."""
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=10
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=0)
+
+        # Should not raise
+        await remote_sandbox_service.check_concurrency_limit()

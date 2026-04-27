@@ -4,6 +4,11 @@ import { PluginSpec } from "#/api/conversation-service/v1-conversation-service.t
 import { SuggestedTask } from "#/utils/types";
 import { Provider } from "#/types/settings";
 import { useTracking } from "#/hooks/use-tracking";
+import { useConversationLimitStore } from "#/stores/conversation-limit-store";
+import {
+  isConcurrencyLimitError,
+  getConcurrencyLimit,
+} from "#/hooks/use-concurrency-limit-error";
 
 interface CreateConversationVariables {
   query?: string;
@@ -31,6 +36,7 @@ interface CreateConversationResponse {
 export const useCreateConversation = () => {
   const queryClient = useQueryClient();
   const { trackConversationCreated } = useTracking();
+  const { showLimitModal } = useConversationLimitStore();
 
   return useMutation({
     mutationKey: ["create-conversation"],
@@ -80,6 +86,11 @@ export const useCreateConversation = () => {
       queryClient.removeQueries({
         queryKey: ["user", "conversations"],
       });
+    },
+    onError: (error) => {
+      if (isConcurrencyLimitError(error)) {
+        showLimitModal(getConcurrencyLimit(error));
+      }
     },
   });
 };
