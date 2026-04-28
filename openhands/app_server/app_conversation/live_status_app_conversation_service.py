@@ -1491,13 +1491,9 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         """Translate user credentials into ACP provider environment variables.
 
         The ACP subprocess reads provider credentials from environment variables.
-        This method maps the user's LLM API key to the env var expected by the
-        active ACP server:
-
-        - claude-code  → ANTHROPIC_API_KEY (uses bypassPermissions; key optional)
-        - codex        → OPENAI_API_KEY
-        - gemini-cli   → GEMINI_API_KEY
-        - custom       → user manages keys entirely via acp_env
+        Maps the user's LLM API key to the env var expected by the active ACP
+        server via ``ACPAgentSettings.api_key_env_var``. Custom servers return
+        ``None`` — users manage credentials entirely via ``acp_env``.
 
         Args:
             user: User information containing credentials
@@ -1518,12 +1514,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             env.update(acp_settings.acp_env)
 
         # Map the user's LLM API key to the env var expected by the ACP server.
-        _SERVER_API_KEY_ENV: dict[str, str] = {
-            'claude-code': 'ANTHROPIC_API_KEY',
-            'codex': 'OPENAI_API_KEY',
-            'gemini-cli': 'GEMINI_API_KEY',
-        }
-        api_key_env = _SERVER_API_KEY_ENV.get(acp_settings.acp_server)
+        api_key_env = acp_settings.api_key_env_var
         if api_key_env and api_key_env not in env:
             llm_api_key = acp_settings.llm.api_key
             if llm_api_key:
