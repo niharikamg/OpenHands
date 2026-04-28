@@ -16,8 +16,10 @@ from fastapi import Request
 from pydantic import Field, SecretStr, TypeAdapter
 
 from openhands.agent_server.models import (
+    ACPConversationInfo,
     ConversationInfo,
     SendMessageRequest,
+    StartACPConversationRequest,
     StartConversationRequest,
     TextContent,
 )
@@ -93,6 +95,7 @@ from openhands.app_server.utils.llm_metadata import (
 from openhands.integrations.provider import PROVIDER_TOKEN_TYPE, ProviderType
 from openhands.integrations.service_types import SuggestedTask
 from openhands.sdk import Agent, AgentContext, LocalWorkspace
+from openhands.sdk.agent.acp_agent import ACPAgent
 from openhands.sdk.hooks import HookConfig
 from openhands.sdk.llm import LLM
 from openhands.sdk.plugin import PluginSource
@@ -109,9 +112,18 @@ from openhands.tools.preset.planning import (
 )
 from openhands.utils._redact_compat import sanitize_config
 from openhands.utils.git import ensure_valid_git_branch_name
+from openhands.utils.sdk_settings_compat import ACPAgentSettings
 
 _conversation_info_type_adapter = TypeAdapter(list[ConversationInfo | None])
+_acp_conversation_info_type_adapter = TypeAdapter(list[ACPConversationInfo | None])
 _logger = logging.getLogger(__name__)
+
+
+def _agent_kind_to_router_path(agent_kind: str) -> str:
+    """Map agent_kind discriminator to the agent-server router path prefix."""
+    if agent_kind == 'acp':
+        return 'acp/conversations'
+    return 'conversations'
 
 # Planning agent instruction to prevent "Ready to proceed?" behavior
 PLANNING_AGENT_INSTRUCTION = """<IMPORTANT_PLANNING_BOUNDARIES>
@@ -319,6 +331,9 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             task.agent_server_url = agent_server_url
             yield task
 
+            # Determine if this is an ACP conversation
+            is_acp = isinstance(start_conversation_request, StartACPConversationRequest)
+
             # Start conversation...
             body_json = start_conversation_request.model_dump(
                 mode='json', context={'expose_secrets': True}
@@ -334,15 +349,26 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 if sandbox.session_api_key
                 else {}
             )
+            router_path = 'acp/conversations' if is_acp else 'conversations'
             response = await self.httpx_client.post(
-                f'{agent_server_url}/api/conversations',
+                f'{agent_server_url}/api/{router_path}',
                 json=body_json,
                 headers=headers,
                 timeout=self.sandbox_startup_timeout,
             )
 
             response.raise_for_status()
-            info = ConversationInfo.model_validate(response.json())
+            if is_acp:
+                info = ACPConversationInfo.model_validate(response.json())
+            else:
+                info = ConversationInfo.model_validate(response.json())
+
+            # Determine display_model and agent_kind
+            agent_kind = 'acp' if is_acp else 'llm'
+            if is_acp and isinstance(start_conversation_request.agent, ACPAgent):
+                display_model = start_conversation_request.agent.acp_model
+            else:
+                display_model = start_conversation_request.agent.llm.model
 
             # Store info...
             user_id = await self.user_context.get_user_id()
@@ -351,7 +377,8 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 title=f'Conversation {info.id.hex[:5]}',
                 sandbox_id=sandbox.id,
                 created_by_user_id=user_id,
-                llm_model=start_conversation_request.agent.llm.model,
+                llm_model=display_model,
+                agent_kind=agent_kind,
                 # Git parameters
                 selected_repository=request.selected_repository,
                 selected_branch=request.selected_branch,
@@ -411,6 +438,13 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             app_conversation_infos
         )
 
+        # Build a mapping from conversation id -> agent_kind for routing
+        conversation_kind_by_id: dict[str, str] = {
+            str(info.id): info.agent_kind
+            for info in app_conversation_infos
+            if info is not None
+        }
+
         # Get referenced sandboxes in a single batch operation...
         sandboxes = await self.sandbox_service.batch_get_sandboxes(
             list(sandbox_id_to_conversation_ids)
@@ -420,7 +454,9 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         # Gather the running conversations
         tasks = [
             self._get_live_conversation_info(
-                sandbox, sandbox_id_to_conversation_ids.get(sandbox.id)
+                sandbox,
+                sandbox_id_to_conversation_ids.get(sandbox.id),
+                conversation_kind_by_id,
             )
             for sandbox in sandboxes
             if sandbox and sandbox.status == SandboxStatus.RUNNING
@@ -456,41 +492,80 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         self,
         sandbox: SandboxInfo,
         conversation_ids: list[str],
-    ) -> list[ConversationInfo]:
-        """Get agent status for multiple conversations from the Agent Server."""
-        try:
-            # Build the URL with query parameters
-            agent_server_url = self._get_agent_server_url(sandbox)
-            url = f'{agent_server_url.rstrip("/")}/api/conversations'
-            params = {'ids': conversation_ids}
+        conversation_kind_by_id: dict[str, str] | None = None,
+    ) -> list[ConversationInfo | ACPConversationInfo]:
+        """Get agent status for multiple conversations from the Agent Server.
 
-            # Set up headers
-            headers = {}
-            if sandbox.session_api_key:
-                headers['X-Session-API-Key'] = sandbox.session_api_key
-
-            response = await self.httpx_client.get(url, params=params, headers=headers)
-            response.raise_for_status()
-
-            data = response.json()
-            conversation_info = _conversation_info_type_adapter.validate_python(data)
-            conversation_info = [c for c in conversation_info if c]
-            return conversation_info
-        except httpx.HTTPStatusError:
-            # The runtime API stops idle sandboxes all the time and they return a 404 or a 503.
-            # This is normal and should not be considered an error.
-            _logger.warning(
-                f'Error getting conversation status from sandbox {sandbox.id}',
-                exc_info=True,
-            )
+        Splits conversation_ids by agent_kind and fetches from the appropriate
+        endpoint (/api/conversations for LLM, /api/acp/conversations for ACP).
+        """
+        if not conversation_ids:
             return []
-        except Exception:
-            # Not getting a status is not a fatal error - we just mark the conversation as stopped
-            _logger.exception(
-                f'Error getting conversation status from sandbox {sandbox.id}',
-                stack_info=True,
-            )
-            return []
+
+        conversation_kind_by_id = conversation_kind_by_id or {}
+
+        # Split by agent kind
+        llm_ids = [
+            cid for cid in conversation_ids
+            if conversation_kind_by_id.get(cid, 'llm') != 'acp'
+        ]
+        acp_ids = [
+            cid for cid in conversation_ids
+            if conversation_kind_by_id.get(cid, 'llm') == 'acp'
+        ]
+
+        agent_server_url = self._get_agent_server_url(sandbox)
+        headers: dict[str, str] = {}
+        if sandbox.session_api_key:
+            headers['X-Session-API-Key'] = sandbox.session_api_key
+
+        results: list[ConversationInfo | ACPConversationInfo] = []
+
+        # Fetch LLM conversations
+        if llm_ids:
+            try:
+                url = f'{agent_server_url.rstrip("/")}/api/conversations'
+                response = await self.httpx_client.get(
+                    url, params={'ids': llm_ids}, headers=headers
+                )
+                response.raise_for_status()
+                data = response.json()
+                infos = _conversation_info_type_adapter.validate_python(data)
+                results.extend(c for c in infos if c)
+            except httpx.HTTPStatusError:
+                _logger.warning(
+                    f'Error getting LLM conversation status from sandbox {sandbox.id}',
+                    exc_info=True,
+                )
+            except Exception:
+                _logger.exception(
+                    f'Error getting LLM conversation status from sandbox {sandbox.id}',
+                    stack_info=True,
+                )
+
+        # Fetch ACP conversations
+        if acp_ids:
+            try:
+                url = f'{agent_server_url.rstrip("/")}/api/acp/conversations'
+                response = await self.httpx_client.get(
+                    url, params={'ids': acp_ids}, headers=headers
+                )
+                response.raise_for_status()
+                data = response.json()
+                infos = _acp_conversation_info_type_adapter.validate_python(data)
+                results.extend(c for c in infos if c)
+            except httpx.HTTPStatusError:
+                _logger.warning(
+                    f'Error getting ACP conversation status from sandbox {sandbox.id}',
+                    exc_info=True,
+                )
+            except Exception:
+                _logger.exception(
+                    f'Error getting ACP conversation status from sandbox {sandbox.id}',
+                    stack_info=True,
+                )
+
+        return results
 
     def _build_conversation(
         self,
@@ -516,7 +591,8 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 None,
             )
             if conversation_url:
-                conversation_url += f'/api/conversations/{app_conversation_info.id.hex}'
+                router_path = _agent_kind_to_router_path(app_conversation_info.agent_kind)
+                conversation_url += f'/api/{router_path}/{app_conversation_info.id.hex}'
             session_api_key = sandbox.session_api_key
 
         return AppConversation(
@@ -1219,7 +1295,7 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         selected_repository: str | None = None,
         plugins: list[PluginSpec] | None = None,
         api_secrets: dict[str, SecretStr] | None = None,
-    ) -> StartConversationRequest:
+    ) -> StartConversationRequest | StartACPConversationRequest:
         """Build a complete StartConversationRequest for a user.
 
         Resolves LLM, MCP, tools, secrets and agent context, then
@@ -1227,6 +1303,8 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         Server-only overrides (system prompts, LLM tracing metadata,
         skills, hooks) are applied to the agent after creation.
         Finally delegates to ``ConversationSettings.create_request()``.
+
+        For ACP agent settings, routes to ``_build_acp_start_conversation_request``.
 
         Args:
             sandbox: Sandbox information
@@ -1246,6 +1324,18 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 precedence.
         """
         user = await self.user_context.get_user_info()
+
+        # Route ACP agent settings to the ACP-specific builder
+        if isinstance(user.agent_settings, ACPAgentSettings):
+            return await self._build_acp_start_conversation_request(
+                sandbox=sandbox,
+                conversation_id=conversation_id,
+                initial_message=initial_message,
+                working_dir=working_dir,
+                selected_repository=selected_repository,
+                plugins=plugins,
+                api_secrets=api_secrets,
+            )
 
         project_dir = get_project_dir(working_dir, selected_repository)
         workspace = LocalWorkspace(working_dir=project_dir)
@@ -1387,6 +1477,126 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         # Pass agent explicitly — it has server-only overrides (system
         # prompts, LLM metadata, skills) applied after create_agent().
         return conv_settings.create_request(StartConversationRequest, agent=agent)
+
+    @staticmethod
+    def _acp_provider_env(user: UserInfo) -> dict[str, str]:
+        """Translate user credentials into ACP provider environment variables.
+
+        The ACP subprocess reads provider credentials from environment variables.
+        This method maps user settings (LLM API key, etc.) to the env vars
+        expected by the ACP provider.
+
+        Args:
+            user: User information containing credentials
+
+        Returns:
+            Dictionary of environment variable name -> value pairs for the ACP subprocess.
+        """
+        env: dict[str, str] = {}
+
+        # Translate LLM API key if present (used by claude-code and gemini-cli)
+        if hasattr(user, 'agent_settings') and isinstance(
+            user.agent_settings, ACPAgentSettings
+        ):
+            acp_settings = user.agent_settings
+            # Pass through any explicit acp_env overrides from settings
+            if acp_settings.acp_env:
+                env.update(acp_settings.acp_env)
+
+        # Pass the LLM API key from the LLM config if available
+        llm_api_key = user.agent_settings.llm.api_key
+        if llm_api_key:
+            key_value = (
+                llm_api_key.get_secret_value()
+                if isinstance(llm_api_key, SecretStr)
+                else str(llm_api_key)
+            )
+            if key_value and key_value.strip():
+                # claude-code reads ANTHROPIC_API_KEY; gemini-cli reads GEMINI_API_KEY
+                # We set ANTHROPIC_API_KEY as the primary; providers may remap as needed.
+                env['ANTHROPIC_API_KEY'] = key_value
+
+        return env
+
+    async def _build_acp_start_conversation_request(
+        self,
+        sandbox: SandboxInfo,
+        conversation_id: UUID,
+        initial_message: SendMessageRequest | None,
+        working_dir: str,
+        selected_repository: str | None = None,
+        plugins: list[PluginSpec] | None = None,
+        api_secrets: dict[str, SecretStr] | None = None,
+    ) -> StartACPConversationRequest:
+        """Build a StartACPConversationRequest for ACP agent conversations.
+
+        Unlike the LLM path, ACP agents run as separate subprocesses; we pass
+        credentials via environment variables rather than injecting an LLM object.
+
+        Args:
+            sandbox: Sandbox information
+            conversation_id: Unique conversation identifier
+            initial_message: Optional initial message to send
+            working_dir: Working directory path
+            selected_repository: Optional repository name
+            plugins: Optional list of plugins to load
+            api_secrets: Optional secrets passed directly via the API.
+        """
+        user = await self.user_context.get_user_info()
+
+        project_dir = get_project_dir(working_dir, selected_repository)
+        workspace = LocalWorkspace(working_dir=project_dir)
+
+        # --- secrets --------------------------------------------------------
+        secrets = await self._setup_secrets_for_git_providers(user)
+
+        if api_secrets:
+            from openhands.app_server.constants import (
+                validate_secret_name,
+                validate_secrets_dict,
+            )
+
+            validate_secrets_dict(cast('Mapping[str, object]', api_secrets))
+            for name, value in api_secrets.items():
+                validate_secret_name(name)
+                if name in secrets:
+                    _logger.warning(
+                        'API-provided secret %r overrides existing secret', name
+                    )
+                secrets[name] = StaticSecret(value=value)
+
+        # --- build the ACP agent ------------------------------------------
+        acp_settings = user.agent_settings  # already verified to be ACPAgentSettings
+        assert isinstance(acp_settings, ACPAgentSettings)
+
+        # Merge provider env vars (API keys etc.) into acp_env
+        provider_env = self._acp_provider_env(user)
+        merged_env = {**(acp_settings.acp_env or {}), **provider_env}
+
+        acp_agent = ACPAgent(
+            acp_command=acp_settings.acp_command,
+            acp_args=acp_settings.acp_args,
+            acp_env=merged_env or None,
+            acp_model=acp_settings.acp_model,
+            acp_session_mode=acp_settings.acp_session_mode,
+            acp_prompt_timeout=acp_settings.acp_prompt_timeout,
+        )
+
+        sdk_plugins: list[PluginSource] | None = None
+        if plugins:
+            sdk_plugins = [
+                PluginSource(source=p.source, ref=p.ref, repo_path=p.repo_path)
+                for p in plugins
+            ]
+
+        return StartACPConversationRequest(
+            workspace=workspace,
+            conversation_id=conversation_id,
+            initial_message=initial_message,
+            secrets=secrets,
+            plugins=sdk_plugins,
+            agent=acp_agent,
+        )
 
     async def _process_pending_messages(
         self,
