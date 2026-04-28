@@ -185,7 +185,7 @@ class SandboxService(ABC):
         Return False if the sandbox did not exist.
         """
 
-    async def check_concurrency_limit(self) -> None:
+    async def check_concurrency_limit(self) -> None:  # noqa: B027
         """Check if the user has reached their concurrent sandbox limit.
 
         This method should be called before starting a new sandbox to fail fast
