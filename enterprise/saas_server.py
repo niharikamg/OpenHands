@@ -56,9 +56,6 @@ from server.sharing.shared_event_router import (  # noqa: E402
 from server.verified_models.verified_model_router import (  # noqa: E402
     api_router as verified_models_router,
 )
-from server.verified_models.verified_model_router import (  # noqa: E402
-    override_llm_models_dependency,
-)
 
 from openhands.server.app import app as base_app  # noqa: E402
 from openhands.server.middleware import (  # noqa: E402
@@ -135,10 +132,6 @@ base_app.include_router(
     verified_models_router
 )  # Add routes for verified models management
 
-# Override the default LLM models implementation with SaaS version
-# This must happen after all routers are included
-override_llm_models_dependency(base_app)
-
 # Override the /api/v1/users/me endpoint to include organization info
 # This replaces the OSS endpoint with a SAAS version that adds org_id, org_name, role, permissions
 override_users_me_endpoint(base_app)
@@ -157,6 +150,18 @@ if BITBUCKET_DATA_CENTER_HOST:
     )
 
     base_app.include_router(bitbucket_dc_proxy_router)
+
+    # Bitbucket Data Center resolver webhook (PR comment trigger).
+    from integrations.bitbucket_data_center.bitbucket_dc_v1_callback_processor import (  # noqa: E402
+        BitbucketDCV1CallbackProcessor,
+    )
+    from server.routes.integration.bitbucket_dc import (  # noqa: E402
+        bitbucket_dc_integration_router,
+    )
+
+    logger.debug(f'Loaded {BitbucketDCV1CallbackProcessor.__name__}')
+
+    base_app.include_router(bitbucket_dc_integration_router)
 base_app.include_router(email_router)  # Add routes for email management
 
 
