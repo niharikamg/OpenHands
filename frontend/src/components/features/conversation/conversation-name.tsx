@@ -165,9 +165,7 @@ export function ConversationName() {
             <span
               className="text-xs text-[#A3A3A3] max-w-[150px] flex items-center gap-1 overflow-hidden"
               title={
-                conversation.display_name ??
-                conversation.llm_model ??
-                undefined
+                conversation.display_name ?? conversation.llm_model ?? undefined
               }
               data-testid="conversation-name-llm-model"
             >

@@ -23,6 +23,9 @@ from openhands.agent_server.models import (
     StartConversationRequest,
     TextContent,
 )
+from openhands.app_server.app_conversation.agent_server_routing import (
+    acp_display_name as _acp_display_name,
+)
 from openhands.app_server.app_conversation.app_conversation_info_service import (
     AppConversationInfoService,
 )
@@ -47,9 +50,6 @@ from openhands.app_server.app_conversation.app_conversation_service import (
 from openhands.app_server.app_conversation.app_conversation_service_base import (
     AppConversationServiceBase,
     get_project_dir,
-)
-from openhands.app_server.app_conversation.agent_server_routing import (
-    acp_display_name as _acp_display_name,
 )
 from openhands.app_server.app_conversation.app_conversation_start_task_service import (
     AppConversationStartTaskService,
