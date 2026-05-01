@@ -8,7 +8,6 @@ import {
 import { OrganizationUserRole } from "#/types/org";
 import { isBillingHidden } from "#/utils/org/billing-visibility";
 import { isSettingsPageHidden } from "#/utils/settings-utils";
-import { ENABLE_ACP } from "#/utils/feature-flags";
 import { useMe } from "./query/use-me";
 import { usePermission } from "./organizations/use-permissions";
 import { useOrgTypeAndAccess } from "./use-org-type-and-access";
@@ -59,7 +58,7 @@ export function useSettingsNavItems(): SettingsNavRenderedItem[] {
   const isSaasMode = config?.app_mode === "saas";
   const featureFlags = config?.feature_flags;
   const isAdminOrOwner = userRole === "admin" || userRole === "owner";
-  const isAcpEnabled = !!featureFlags?.enable_acp || ENABLE_ACP();
+  const isAcpEnabled = !!featureFlags?.enable_acp;
   const isAcpAgent = settings?.agent_settings?.agent_kind === "acp";
 
   let items = isSaasMode ? [...SAAS_NAV_ITEMS] : [...OSS_NAV_ITEMS];

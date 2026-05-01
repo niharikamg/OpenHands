@@ -15,7 +15,6 @@ import {
   displaySuccessToast,
 } from "#/utils/custom-toast-handlers";
 import { retrieveAxiosErrorMessage } from "#/utils/retrieve-axios-error-message";
-import { ENABLE_ACP } from "#/utils/feature-flags";
 
 export const handle = { hideTitle: true };
 
@@ -67,7 +66,7 @@ function AgentSettingsScreen() {
     setIsDirty(false);
   }, [settings]);
 
-  const isAcpEnabled = !!config?.feature_flags?.enable_acp || ENABLE_ACP();
+  const isAcpEnabled = !!config?.feature_flags?.enable_acp;
 
   useEffect(() => {
     if (config && !isAcpEnabled) {
