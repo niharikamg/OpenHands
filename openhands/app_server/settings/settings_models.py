@@ -111,7 +111,6 @@ class Settings(BaseModel):
     git_user_name: str | None = None
     git_user_email: str | None = None
     v1_enabled: bool = True
-    acp_credential_paths: list[str] | None = None
     agent_settings: AgentSettingsConfig = Field(default_factory=default_agent_settings)
     conversation_settings: ConversationSettings = Field(
         default_factory=ConversationSettings

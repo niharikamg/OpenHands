@@ -1,7 +1,6 @@
 """Unit tests for the methods in LiveStatusAppConversationService."""
 
 import io
-import logging
 import json
 import os
 import zipfile
@@ -3573,95 +3572,3 @@ class TestBuildAcpStartConversationRequestSecrets:
         # acp_env must win; the UI-saved key must NOT overwrite it
         assert request.agent.acp_env.get('ANTHROPIC_API_KEY') == 'sk-explicit-override'
 
-
-class TestCopyAcpCredentialsToSandbox:
-    """Tests for ``_copy_acp_credentials_to_sandbox``."""
-
-    @pytest.fixture
-    def service(self):
-        mock_user_context = Mock(spec=UserContext)
-        return LiveStatusAppConversationService(
-            init_git_in_empty_workspace=True,
-            user_context=mock_user_context,
-            app_conversation_info_service=Mock(),
-            app_conversation_start_task_service=Mock(),
-            event_callback_service=Mock(),
-            event_service=Mock(),
-            sandbox_service=Mock(),
-            sandbox_spec_service=Mock(),
-            jwt_service=Mock(),
-            pending_message_service=Mock(),
-            sandbox_startup_timeout=30,
-            sandbox_startup_poll_frequency=1,
-            max_num_conversations_per_sandbox=20,
-            httpx_client=Mock(),
-            web_url=None,
-            openhands_provider_base_url=None,
-            access_token_hard_timeout=None,
-            app_mode='test',
-        )
-
-    @pytest.fixture
-    def mock_workspace(self):
-        ws = Mock(spec=AsyncRemoteWorkspace)
-        ws.execute_command = AsyncMock(return_value=SimpleNamespace(exit_code=0, stderr=''))
-        return ws
-
-    @pytest.mark.asyncio
-    async def test_copies_files_from_credential_dir(self, service, mock_workspace, tmp_path):
-        """Files in the credential directory are written into the sandbox."""
-        cred_dir = tmp_path / '.testcreds'
-        cred_dir.mkdir()
-        (cred_dir / 'credentials.json').write_text('{"token": "abc"}')
-
-        with patch('openhands.app_server.app_conversation.live_status_app_conversation_service.Path.home', return_value=tmp_path):
-            await service._copy_acp_credentials_to_sandbox(
-                mock_workspace, [str(cred_dir)]
-            )
-
-        assert mock_workspace.execute_command.call_count == 1
-        cmd = mock_workspace.execute_command.call_args[0][0]
-        assert 'base64 -d' in cmd
-        assert '.testcreds/credentials.json' in cmd
-
-    @pytest.mark.asyncio
-    async def test_skips_missing_path(self, service, mock_workspace, tmp_path):
-        """A path that does not exist on the host is silently skipped."""
-        await service._copy_acp_credentials_to_sandbox(
-            mock_workspace, [str(tmp_path / 'no-such-dir')]
-        )
-        mock_workspace.execute_command.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_copies_nested_files(self, service, mock_workspace, tmp_path):
-        """Nested subdirectories are walked and all files are uploaded."""
-        cred_dir = tmp_path / '.testcreds'
-        (cred_dir / 'sub').mkdir(parents=True)
-        (cred_dir / 'credentials.json').write_text('top')
-        (cred_dir / 'sub' / 'token').write_text('nested')
-
-        with patch('openhands.app_server.app_conversation.live_status_app_conversation_service.Path.home', return_value=tmp_path):
-            await service._copy_acp_credentials_to_sandbox(
-                mock_workspace, [str(cred_dir)]
-            )
-
-        assert mock_workspace.execute_command.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_resilient_on_execute_failure(self, service, mock_workspace, tmp_path):
-        """A non-zero exit code from execute_command does not raise; the copy is best-effort."""
-        mock_workspace.execute_command = AsyncMock(
-            return_value=SimpleNamespace(exit_code=1, stderr='permission denied')
-        )
-        cred_dir = tmp_path / '.testcreds'
-        cred_dir.mkdir()
-        (cred_dir / 'credentials.json').write_text('data')
-
-        with patch('openhands.app_server.app_conversation.live_status_app_conversation_service.Path.home', return_value=tmp_path):
-            # Should not raise even when execute_command fails
-            await service._copy_acp_credentials_to_sandbox(
-                mock_workspace, [str(cred_dir)]
-            )
-
-        # execute_command was still called (it tried)
-        mock_workspace.execute_command.assert_called_once()

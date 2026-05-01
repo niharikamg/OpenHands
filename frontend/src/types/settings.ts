@@ -139,7 +139,6 @@ export type Settings = {
   git_user_name?: string;
   git_user_email?: string;
   v1_enabled?: boolean;
-  acp_credential_paths?: string[] | null;
   agent_settings_schema?: SettingsSchema | null;
   agent_settings?: Record<string, SettingsValue> | null;
   conversation_settings_schema?: SettingsSchema | null;

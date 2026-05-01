@@ -27,12 +27,6 @@ const PRESET_COMMANDS: Record<Exclude<CommandPreset, "custom">, string> = {
   "gemini-cli": "npx -y @google/gemini-cli --acp",
 };
 
-/** Default credential path suggestion for each preset. */
-const PRESET_CREDENTIAL_PATH: Partial<Record<CommandPreset, string>> = {
-  "claude-code": "~/.claude",
-  codex: "~/.codex",
-};
-
 const COMMAND_PLACEHOLDER = PRESET_COMMANDS["claude-code"];
 
 function tokenizeCommand(value: string): string[] {
@@ -58,7 +52,6 @@ function AgentSettingsScreen() {
   const [commandText, setCommandText] = useState("");
   const [selectedPreset, setSelectedPreset] =
     useState<CommandPreset>("claude-code");
-  const [credentialPath, setCredentialPath] = useState("");
   const [acpModel, setAcpModel] = useState("");
   const [isDirty, setIsDirty] = useState(false);
 
@@ -82,15 +75,11 @@ function AgentSettingsScreen() {
       setCommandText(joined);
       setSelectedPreset(detectPreset(joined));
 
-      const savedPaths = settings.acp_credential_paths;
-      setCredentialPath(savedPaths?.[0] ?? "");
-
       const savedModel = settings.agent_settings?.acp_model;
       setAcpModel(typeof savedModel === "string" ? savedModel : "");
     } else {
       setAgentType("openhands");
       setCommandText("");
-      setCredentialPath("");
       setAcpModel("");
     }
     setIsDirty(false);
@@ -112,7 +101,6 @@ function AgentSettingsScreen() {
 
   const handleSave = () => {
     let agentSettingsDiff: Record<string, unknown>;
-    let credentialPaths: string[] | null;
     if (isAcp) {
       agentSettingsDiff = {
         agent_kind: "acp",
@@ -121,8 +109,6 @@ function AgentSettingsScreen() {
         acp_args: [],
         acp_model: acpModel.trim() || null,
       };
-      const trimmed = credentialPath.trim();
-      credentialPaths = trimmed ? [trimmed] : null;
     } else {
       agentSettingsDiff = {
         agent_kind: "openhands",
@@ -131,14 +117,10 @@ function AgentSettingsScreen() {
         acp_env: null,
         acp_model: null,
       };
-      credentialPaths = null;
     }
 
     saveSettings(
-      {
-        agent_settings_diff: agentSettingsDiff,
-        acp_credential_paths: credentialPaths,
-      },
+      { agent_settings_diff: agentSettingsDiff },
       {
         onError: (error) => {
           const message = retrieveAxiosErrorMessage(error as AxiosError);
@@ -205,7 +187,6 @@ function AgentSettingsScreen() {
               if (preset !== "custom") {
                 setCommandText(PRESET_COMMANDS[preset]);
               }
-              setCredentialPath(PRESET_CREDENTIAL_PATH[preset] ?? "");
               setIsDirty(true);
             }}
           />
@@ -222,35 +203,12 @@ function AgentSettingsScreen() {
               onChange={(e) => {
                 const text = e.target.value;
                 setCommandText(text);
-                const newPreset = detectPreset(text);
-                if (newPreset !== selectedPreset) {
-                  setSelectedPreset(newPreset);
-                  setCredentialPath(PRESET_CREDENTIAL_PATH[newPreset] ?? "");
-                }
+                setSelectedPreset(detectPreset(text));
                 setIsDirty(true);
               }}
             />
             <Typography.Text className="text-xs text-[#717888]">
               {t(I18nKey.SETTINGS$AGENT_COMMAND_HINT)}
-            </Typography.Text>
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <SettingsInput
-              testId="agent-credential-path-input"
-              label={t(I18nKey.SETTINGS$AGENT_CREDENTIAL_PATH)}
-              type="text"
-              className="w-full"
-              value={credentialPath}
-              placeholder={PRESET_CREDENTIAL_PATH[selectedPreset] ?? "~/.claude"}
-              showOptionalTag
-              onChange={(value) => {
-                setCredentialPath(value);
-                setIsDirty(true);
-              }}
-            />
-            <Typography.Text className="text-xs text-[#717888]">
-              {t(I18nKey.SETTINGS$AGENT_CREDENTIAL_PATH_HINT)}
             </Typography.Text>
           </div>
 

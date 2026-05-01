@@ -1,16 +1,13 @@
 import asyncio
-import base64
 import json
 import logging
 import os
-import shlex
 import tempfile
 import zipfile
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pathlib import Path, PurePosixPath
 from typing import Any, AsyncGenerator, Sequence, cast
 from uuid import UUID, uuid4
 
@@ -332,16 +329,6 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 task, sandbox, remote_workspace, agent_server_url
             ):
                 yield updated_task
-
-            # Copy host credential files into the sandbox for ACP agents that
-            # authenticate via local credential stores (e.g. ~/.claude, ~/.codex).
-            user_for_creds = await self.user_context.get_user_info()
-            cred_paths = getattr(user_for_creds, 'acp_credential_paths', None)
-            if (
-                isinstance(user_for_creds.agent_settings, ACPAgentSettings)
-                and cred_paths
-            ):
-                await self._copy_acp_credentials_to_sandbox(remote_workspace, cred_paths)
 
             # Build the start request
             start_conversation_request = (
@@ -1558,57 +1545,6 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
             env[api_key_env] = key_value
 
         return env
-
-    async def _copy_acp_credentials_to_sandbox(
-        self,
-        workspace: AsyncRemoteWorkspace,
-        credential_paths: list[str],
-    ) -> None:
-        """Copy local credential directories into the running sandbox container.
-
-        Each path is expanded relative to the host home directory, then its
-        files are written into the container at the same ``$HOME``-relative
-        location using a base64-round-trip so that quoting and binary content
-        are handled safely.  The shell inside the container expands ``$HOME``.
-        """
-        for raw_path in credential_paths:
-            host_path = Path(os.path.expanduser(raw_path))
-            if not host_path.exists():
-                _logger.debug('ACP credential path not found on host: %s', host_path)
-                continue
-
-            file_paths = (
-                [host_path]
-                if host_path.is_file()
-                else [p for p in host_path.rglob('*') if p.is_file()]
-            )
-            for file_path in file_paths:
-                try:
-                    rel = file_path.relative_to(Path.home()).as_posix()
-                except ValueError:
-                    _logger.warning(
-                        'ACP credential file %s is not under home dir; skipping',
-                        file_path,
-                    )
-                    continue
-
-                parent_posix = str(PurePosixPath(rel).parent)
-                content_b64 = base64.b64encode(file_path.read_bytes()).decode()
-                cmd = (
-                    f'mkdir -p "$HOME/{parent_posix}" && '
-                    f'echo {shlex.quote(content_b64)} | base64 -d > "$HOME/{rel}"'
-                )
-                result = await workspace.execute_command(cmd)
-                if result.exit_code:
-                    _logger.warning(
-                        'Failed to copy credential file %s to sandbox: %s',
-                        file_path,
-                        result.stderr,
-                    )
-                else:
-                    _logger.info(
-                        'Copied credential file to sandbox: %s', rel
-                    )
 
     async def _build_acp_start_conversation_request(
         self,
