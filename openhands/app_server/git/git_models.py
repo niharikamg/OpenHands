@@ -23,12 +23,12 @@ class SortOrder(StrEnum):
         UPDATED_ASC: Sort by last updated, ascending
     """
 
-    STAR_DESC = 'stars-desc'
-    STAR_ASC = 'stars-asc'
-    FORKS_DESC = 'forks-desc'
-    FORKS_ASC = 'forks-asc'
-    UPDATED_DESC = 'updated-desc'
-    UPDATED_ASC = 'updated-asc'
+    STAR_DESC = "stars-desc"
+    STAR_ASC = "stars-asc"
+    FORKS_DESC = "forks-desc"
+    FORKS_ASC = "forks-asc"
+    UPDATED_DESC = "updated-desc"
+    UPDATED_ASC = "updated-asc"
 
 
 class InstallationPage(BaseModel):
