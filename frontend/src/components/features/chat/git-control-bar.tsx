@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams } from "react-router";
 import { GitControlBarRepoButton } from "./git-control-bar-repo-button";
@@ -11,12 +11,15 @@ import { useTaskPolling } from "#/hooks/query/use-task-polling";
 import { useUnifiedWebSocketStatus } from "#/hooks/use-unified-websocket-status";
 import { useSendMessage } from "#/hooks/use-send-message";
 import { useUpdateConversationRepository } from "#/hooks/mutation/use-update-conversation-repository";
+import { useRepositoryOnboardingFiles } from "#/hooks/query/use-repository-onboarding-files";
 import { Provider } from "#/types/settings";
 import { Branch, GitRepository } from "#/types/git";
 import { I18nKey } from "#/i18n/declaration";
 import { GitControlBarTooltipWrapper } from "./git-control-bar-tooltip-wrapper";
 import { OpenRepositoryModal } from "./open-repository-modal";
+import { OnboardingPluginModal } from "#/components/features/home/onboarding-plugin-modal";
 import { displayErrorToast } from "#/utils/custom-toast-handlers";
+import { needsOnboarding } from "#/utils/onboarding-utils";
 import { useHomeStore } from "#/stores/home-store";
 import { useOptimisticUserMessageStore } from "#/stores/optimistic-user-message-store";
 
@@ -28,6 +31,9 @@ export function GitControlBar({ onSuggestionsClick }: GitControlBarProps) {
   const { t } = useTranslation();
   const { conversationId } = useParams<{ conversationId: string }>();
   const [isOpenRepoModalOpen, setIsOpenRepoModalOpen] = useState(false);
+  const [showOnboardingModal, setShowOnboardingModal] = useState(false);
+  // Track if we've already shown the modal for this conversation to prevent showing twice
+  const onboardingModalShownRef = useRef(false);
   const { addRecentRepository } = useHomeStore();
   const { setOptimisticUserMessage } = useOptimisticUserMessageStore();
 
@@ -58,6 +64,43 @@ export function GitControlBar({ onSuggestionsClick }: GitControlBarProps) {
 
   // Enable buttons only when conversation exists and WS is connected
   const isConversationReady = !!conversation && webSocketStatus === "OPEN";
+
+  // Check onboarding files for the current repository
+  const { data: onboardingFiles } = useRepositoryOnboardingFiles(
+    selectedRepository,
+    gitProvider,
+    selectedBranch,
+    hasRepository,
+  );
+
+  // Show onboarding modal once per conversation when repo needs onboarding
+  // This handles both:
+  // 1. Conversation loaded with a repo that needs onboarding
+  // 2. User connected a new repo via OpenRepositoryModal
+  useEffect(() => {
+    if (
+      hasRepository &&
+      needsOnboarding(onboardingFiles) &&
+      !onboardingModalShownRef.current
+    ) {
+      setShowOnboardingModal(true);
+      onboardingModalShownRef.current = true;
+    }
+  }, [hasRepository, onboardingFiles]);
+
+  // Reset the modal shown flag when conversation changes
+  useEffect(() => {
+    onboardingModalShownRef.current = false;
+  }, [conversationId]);
+
+  const handleOnboardingDismiss = useCallback(() => {
+    setShowOnboardingModal(false);
+  }, []);
+
+  const handleOnboardingLoadPlugin = useCallback(() => {
+    // TODO: Implement load plugin functionality
+    setShowOnboardingModal(false);
+  }, []);
 
   const handleLaunchRepository = (
     repository: GitRepository,
@@ -181,6 +224,13 @@ export function GitControlBar({ onSuggestionsClick }: GitControlBarProps) {
         onLaunch={handleLaunchRepository}
         defaultProvider={gitProvider}
       />
+
+      {showOnboardingModal && (
+        <OnboardingPluginModal
+          onLoadPlugin={handleOnboardingLoadPlugin}
+          onDismiss={handleOnboardingDismiss}
+        />
+      )}
     </div>
   );
 }
