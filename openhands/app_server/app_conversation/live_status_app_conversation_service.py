@@ -1542,6 +1542,9 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 limit=100,
             )
             all_events.extend(page.items)
+            if len(all_events) >= _ACP_RESUME_MAX_EVENTS:
+                all_events = all_events[:_ACP_RESUME_MAX_EVENTS]
+                break
             if page.next_page_id is None:
                 break
             page_id = page.next_page_id
@@ -1570,9 +1573,16 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
                 if isinstance(content, str):
                     text = content.strip()
                 else:
-                    text = ' '.join(
-                        c.text for c in content if hasattr(c, 'text')
-                    ).strip()
+                    text_parts = []
+                    for c in content:
+                        if isinstance(c, TextContent):
+                            text_parts.append(c.text)
+                        else:
+                            _logger.warning(
+                                'Skipping non-text content in ACP resume: %s',
+                                type(c).__name__,
+                            )
+                    text = ' '.join(text_parts).strip()
                 if text:
                     lines.append(f'{role_label}: {text}')
                     lines.append('')
