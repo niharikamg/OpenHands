@@ -6,6 +6,7 @@ Architecture diagrams specific to the OpenHands SaaS/Enterprise deployment.
 
 - [Authentication Flow](./authentication.md) - Keycloak-based authentication for SaaS deployment
 - [External Integrations](./external-integrations.md) - GitHub, Slack, Jira, and other service integrations
+- [Sandbox Routing](./sandbox-routing.md) - Sandbox URL routing modes (subdomain vs path-based)
 
 ## Related Documentation
 
