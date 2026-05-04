@@ -1645,17 +1645,10 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         # If this conversation has prior events in the durable store the sandbox
         # was recycled and the ACP server's session storage is gone.  Synthesize
         # the history as the first user message so the agent has context.
+        # On a restart initial_message is always None (no new user turn is sent).
         resume_msg = await self._synthesize_acp_resume_initial_message(conversation_id)
         if resume_msg is not None:
-            if initial_message is None:
-                initial_message = resume_msg
-            else:
-                # Prepend history context to the user's new message
-                initial_message = SendMessageRequest(
-                    role='user',
-                    content=list(resume_msg.content) + list(initial_message.content),
-                    run=initial_message.run,
-                )
+            initial_message = resume_msg
 
         # --- build the ACP agent ------------------------------------------
         acp_settings = user.agent_settings  # already verified to be ACPAgentSettings

@@ -3565,57 +3565,6 @@ class TestSynthesizeAcpResumeInitialMessage:
         assert service.event_service.search_events.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_resume_appended_to_user_initial_message(self, service):
-        """When initial_message is provided, history is prepended to its content."""
-        try:
-            from openhands.sdk.settings import ACPAgentSettings
-        except ImportError:
-            pytest.skip('ACPAgentSettings not available in this SDK build')
-
-        events = [self._make_message_event('user', 'Prior task')]
-        service.event_service.search_events = AsyncMock(
-            return_value=self._make_page(events)
-        )
-
-        user = _TestUserInfo(
-            id='u1',
-            llm_model='',
-            llm_base_url=None,
-            llm_api_key=None,
-            sandbox_grouping_strategy=SandboxGroupingStrategy.ADD_TO_ANY,
-            confirmation_mode=False,
-            security_analyzer=None,
-            search_api_key=None,
-            mcp_config=None,
-            disabled_skills=[],
-        )
-        user.agent_settings = ACPAgentSettings(
-            acp_server='claude-code',
-            llm=LLM(model='claude-sonnet-4-5'),
-            acp_env={},
-        )
-        service.user_context.get_user_info = AsyncMock(return_value=user)
-        service._setup_secrets_for_git_providers = AsyncMock(return_value={})
-
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            user_msg = SendMessageRequest(
-                role='user', content=[TextContent(type='text', text='New follow-up')]
-            )
-            req = await service._build_acp_start_conversation_request(
-                sandbox=Mock(spec=SandboxInfo),
-                conversation_id=uuid4(),
-                initial_message=user_msg,
-                working_dir=tmp,
-            )
-
-        assert req.initial_message is not None
-        all_text = ' '.join(c.text for c in req.initial_message.content)
-        assert '<<RESUMED CONVERSATION>>' in all_text
-        assert 'New follow-up' in all_text
-
-    @pytest.mark.asyncio
     async def test_no_prior_events_initial_message_unchanged(self, service):
         """Fresh start: no events → initial_message flows through unchanged."""
         try:
