@@ -1752,6 +1752,12 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         # suppression so that conflicting vars (e.g. ANTHROPIC_API_KEY when
         # CLAUDE_CONFIG_DIR OAuth auth is active) don't reach the subprocess.
         # Priority (highest → lowest): acp_env > provider_env > file_env
+        #
+        # TODO: remove this app-server-side suppression once OpenHands is
+        # pinned to the SDK version that includes
+        # OpenHands/software-agent-sdk#3091 (_ENV_CONFLICT_MAP in ACPAgent).
+        # That PR moves the conflict-suppression logic into _start_acp_server
+        # where it fires for every caller, not just the app-server path.
         provider_env = {
             k: v
             for k, v in self._acp_provider_env(user).items()
