@@ -159,7 +159,14 @@ function AgentSettingsScreen() {
         selectedKey={agentType}
         onSelectionChange={(key) => {
           if (!key) return;
-          setAgentType(key as AgentType);
+          const newType = key as AgentType;
+          setAgentType(newType);
+          if (newType === "acp" && !commandText) {
+            const preset =
+              selectedPreset !== "custom" ? selectedPreset : "claude-code";
+            setSelectedPreset(preset);
+            setCommandText(PRESET_COMMANDS[preset]);
+          }
           setIsDirty(true);
         }}
       />
