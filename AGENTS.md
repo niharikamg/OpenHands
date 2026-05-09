@@ -80,6 +80,11 @@ When regenerating lockfiles (poetry.lock, uv.lock, etc.), you MUST use the same 
 
 This ensures that lockfile updates only contain actual dependency changes, not tool version migration artifacts.
 
+### Dependency remediation note
+
+- `gitpython` is not declared directly in the main manifests by default; it comes in transitively through `openhands-aci` in both the root project and the `enterprise/` path dependency graph.
+- Regenerating `enterprise/poetry.lock` after root dependency changes can also refresh the path-based `openhands-ai` package metadata (for example `openhands-sdk`, `openhands-agent-server`, and `openhands-tools` versions) if the enterprise lockfile is stale relative to the root `pyproject.toml`.
+
 ## PR-Specific Artifacts (`.pr/` directory)
 
 When working on a PR that requires design documents, scripts meant for development-only, or other temporary artifacts that should NOT be merged to main, store them in a `.pr/` directory at the repository root.
