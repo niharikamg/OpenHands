@@ -78,8 +78,6 @@ When regenerating lockfiles (poetry.lock, uv.lock, etc.), you MUST use the same 
    uv lock
    ```
 
-Note: some current `uv.lock` files in this repo no longer include a generator-version header. In that case, use the installed `uv` version, and expect `uv lock --upgrade-package <name>` to also sync any stale `openhands-*` package pins to the versions already declared in `pyproject.toml`.
-
 This ensures that lockfile updates only contain actual dependency changes, not tool version migration artifacts.
 
 ## PR-Specific Artifacts (`.pr/` directory)
