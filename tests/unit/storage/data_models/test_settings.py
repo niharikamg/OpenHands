@@ -13,8 +13,8 @@ from openhands.app_server.settings.settings_router import LITE_LLM_API_URL
 from openhands.sdk.llm import LLM
 from openhands.sdk.settings import (
     AGENT_SETTINGS_SCHEMA_VERSION,
-    OpenHandsAgentSettings,
     ConversationSettings,
+    OpenHandsAgentSettings,
 )
 from openhands.sdk.settings.model import CondenserSettings, VerificationSettings
 
@@ -168,7 +168,9 @@ def test_settings_agent_settings_keeps_sdk_mcp_shape_canonical():
 
 
 def test_settings_update_mcp_config():
-    settings = Settings(agent_settings=OpenHandsAgentSettings(llm=LLM(model='sdk-model')))
+    settings = Settings(
+        agent_settings=OpenHandsAgentSettings(llm=LLM(model='sdk-model'))
+    )
 
     settings.update(
         {
