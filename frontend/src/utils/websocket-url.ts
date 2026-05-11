@@ -39,16 +39,23 @@ export function extractBaseHost(
 export function extractPathPrefix(
   conversationUrl: string | null | undefined,
 ): string {
-  if (conversationUrl && !conversationUrl.startsWith("/")) {
-    try {
-      const url = new URL(conversationUrl);
-      const pathBeforeApi = url.pathname.split("/api/conversations")[0] || "";
-      return pathBeforeApi.replace(/\/$/, ""); // Remove trailing slash
-    } catch {
-      return "";
-    }
+  if (!conversationUrl || conversationUrl.startsWith("/")) return "";
+  try {
+    const { pathname } = new URL(conversationUrl);
+    // Match both LLM (/api/conversations) and ACP (/api/acp/conversations)
+    // path shapes anchored at a segment boundary so a path that *contains*
+    // ``/api/conversations`` as a substring of some unrelated segment is
+    // not misclassified. The optional ``acp/`` keeps a single regex
+    // covering both shapes and the ``$|/`` end-anchor stops at the
+    // ``/{id}`` segment that follows.
+    const match = pathname.match(
+      /^(.*?)\/api\/(?:acp\/)?conversations(?:\/|$)/,
+    );
+    const prefix = match ? match[1] : "";
+    return prefix.replace(/\/$/, "");
+  } catch {
+    return "";
   }
-  return "";
 }
 
 /**

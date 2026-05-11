@@ -12,7 +12,7 @@ from jwt import InvalidTokenError
 from pydantic import SecretStr
 
 from openhands import tools  # type: ignore[attr-defined]
-from openhands.agent_server.models import ConversationInfo, Success
+from openhands.agent_server.models import ACPConversationInfo, Success
 from openhands.analytics import get_analytics_service, resolve_analytics_context
 from openhands.app_server.app_conversation.app_conversation_info_service import (
     AppConversationInfoService,
@@ -51,6 +51,7 @@ from openhands.app_server.user_auth.user_auth import (
     get_for_user as get_user_auth_for_user,
 )
 from openhands.sdk import ConversationExecutionStatus, Event
+from openhands.sdk.agent.acp_agent import ACPAgent
 from openhands.sdk.event import ConversationStateUpdateEvent
 
 router = APIRouter(prefix='/webhooks', tags=['Webhooks'])
@@ -297,11 +298,14 @@ async def valid_conversation(
 
 @router.post('/conversations')
 async def on_conversation_update(
-    conversation_info: ConversationInfo,
+    conversation_info: ACPConversationInfo,
     sandbox_info: SandboxInfo = Depends(valid_sandbox),
     app_conversation_info_service: AppConversationInfoService = app_conversation_info_service_dependency,
 ) -> Success:
-    """Webhook callback for when a conversation starts, pauses, resumes, or deletes."""
+    """Webhook callback for when a conversation starts, pauses, resumes, or deletes.
+
+    Accepts ACPConversationInfo so ACP-agent conversations are handled too.
+    """
     existing = await valid_conversation(
         conversation_info.id, sandbox_info, app_conversation_info_service
     )
@@ -326,12 +330,27 @@ async def on_conversation_update(
         sandbox_id=sandbox_info.id,
     )
 
+    # Trust the discriminated-union payload over any stored ``agent_kind``
+    # on ``existing``: a webhook is always authoritative for the agent
+    # currently running, and a drifted row (e.g. mid-migration data) must
+    # not lock us into the wrong branch.
+    agent = conversation_info.agent
+    if isinstance(agent, ACPAgent):
+        agent_kind = 'acp'
+        llm_model = None
+    else:
+        # The discriminated union has two arms — Agent and ACPAgent — and
+        # ``AgentBase.llm: LLM`` is non-optional on both.
+        agent_kind = 'openhands'
+        llm_model = agent.llm.model
+
     app_conversation_info = AppConversationInfo(
         id=conversation_info.id,
         title=existing.title or f'Conversation {conversation_info.id.hex}',
         sandbox_id=sandbox_info.id,
         created_by_user_id=sandbox_info.created_by_user_id,
-        llm_model=conversation_info.agent.llm.model,
+        llm_model=llm_model,
+        agent_kind=agent_kind,
         # Git parameters
         selected_repository=existing.selected_repository,
         selected_branch=existing.selected_branch,
@@ -374,11 +393,7 @@ async def on_conversation_update(
             ctx=ctx,
             conversation_id=str(conversation_info.id),
             trigger=existing.trigger.value if existing.trigger else None,
-            llm_model=(
-                conversation_info.agent.llm.model
-                if conversation_info.agent and conversation_info.agent.llm
-                else None
-            ),
+            llm_model=llm_model,
             agent_type='default',
             has_repository=existing.selected_repository is not None,
         )
