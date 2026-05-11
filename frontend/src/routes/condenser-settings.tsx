@@ -1,8 +1,11 @@
 import { SdkSectionPage } from "#/components/features/settings/sdk-settings/sdk-section-page";
+import { useAcpGuardIfPersonal } from "#/hooks/use-acp-guard";
 import { createPermissionGuard } from "#/utils/org/permission-guard";
 import { requireOrgDefaultsRedirect } from "#/utils/org/saas-redirect-to-org-defaults-guard";
 
 function CondenserSettingsScreen() {
+  useAcpGuardIfPersonal("personal");
+
   return (
     <SdkSectionPage
       settingsSources={[

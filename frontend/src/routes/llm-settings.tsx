@@ -2,6 +2,7 @@ import React from "react";
 import { useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
 import { FaChevronLeft } from "react-icons/fa6";
+import { useAcpGuardIfPersonal } from "#/hooks/use-acp-guard";
 import { ModelSelector } from "#/components/shared/modals/settings/model-selector";
 import { createPermissionGuard } from "#/utils/org/permission-guard";
 import { requireOrgDefaultsRedirect } from "#/utils/org/saas-redirect-to-org-defaults-guard";
@@ -138,6 +139,8 @@ export function LlmSettingsScreen({
   const [initialViewHint, setInitialViewHint] =
     React.useState<SettingsView | null>(null);
   const isProfilesView = scope === "personal" && showProfiles;
+
+  useAcpGuardIfPersonal(scope);
 
   const defaultModel = String(
     (DEFAULT_SETTINGS.agent_settings?.llm as Record<string, unknown>)?.model ??
