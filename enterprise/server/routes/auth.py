@@ -1,5 +1,6 @@
 import base64
 import json
+import traceback
 import uuid
 import warnings
 from datetime import datetime, timedelta, timezone
@@ -933,6 +934,20 @@ async def logout(request: Request):
     # Try to properly logout from Keycloak, but don't fail if it doesn't work
     try:
         user_auth = cast(SaasUserAuth, await get_user_auth(request))
+        # Temporary debug logging to diagnose offline sessions being terminated
+        # on logout. If `auth_type` is BEARER (or any bearer-style header is
+        # set), `user_auth.refresh_token` is the offline token, and handing it
+        # to Keycloak's /logout endpoint will end the offline session.
+        logger.info(
+            'logout_debug',
+            extra={
+                'auth_type': getattr(user_auth, 'auth_type', None),
+                'has_authorization': 'Authorization' in request.headers,
+                'has_x_session_api_key': 'X-Session-API-Key' in request.headers,
+                'has_x_access_token': 'X-Access-Token' in request.headers,
+            },
+        )
+        logger.info('logout_debug_stack:\n%s', ''.join(traceback.format_stack()))
         if user_auth and user_auth.refresh_token:
             refresh_token = user_auth.refresh_token.get_secret_value()
             await token_manager.logout(refresh_token)
