@@ -182,7 +182,9 @@ async def test_acp_conversation_stores_display_name(
     saved = await service.get_app_conversation_info(conversation_id)
     assert saved is not None
     assert saved.llm_model is None
-    assert saved.display_name == 'ACP: claude-agent-acp'
+    # ``acp_display_name`` now resolves the SDK registry, so a known preset
+    # command surfaces as its brand name rather than the raw package basename.
+    assert saved.display_name == 'Claude Code'
     assert saved.agent_kind == 'acp'
 
 

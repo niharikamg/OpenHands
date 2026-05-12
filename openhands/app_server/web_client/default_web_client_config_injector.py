@@ -9,7 +9,6 @@ from openhands.app_server.web_client.web_client_config_injector import (
     WebClientConfigInjector,
 )
 from openhands.app_server.web_client.web_client_models import (
-    ACPProviderConfig,
     WebClientConfig,
     WebClientFeatureFlags,
 )
@@ -161,19 +160,6 @@ class DefaultWebClientConfigInjector(WebClientConfigInjector):
         }
     )
     slack_enabled: bool = Field(default_factory=_get_slack_enabled)
-    acp_providers: list[ACPProviderConfig] = Field(
-        default_factory=lambda: [
-            ACPProviderConfig(
-                key=provider.key,
-                display_name=provider.display_name,
-                # SDK exposes ``default_command`` as ``tuple[str, ...]`` (frozen
-                # registry record); the API contract uses ``list[str]`` for
-                # JSON-friendliness.
-                default_command=list(provider.default_command),
-            )
-            for provider in ACP_PROVIDERS.values()
-        ]
-    )
 
     async def get_web_client_config(self) -> WebClientConfig:
         from openhands.app_server.config import get_global_config
@@ -194,6 +180,8 @@ class DefaultWebClientConfigInjector(WebClientConfigInjector):
             gitlab_enabled=self.gitlab_enabled,
             provider_default_hosts=self.provider_default_hosts,
             slack_enabled=self.slack_enabled,
-            acp_providers=self.acp_providers,
+            # The SDK registry is the single source of truth — Pydantic reads
+            # the dataclass via ``from_attributes=True`` on ``WebClientConfig``.
+            acp_providers=list(ACP_PROVIDERS.values()),
         )
         return result

@@ -33,6 +33,18 @@ export interface WebClientFeatureFlags {
   enable_onboarding: boolean;
 }
 
+/**
+ * Wire shape of an entry in the SDK's ``ACP_PROVIDERS`` registry — mirrored
+ * verbatim from ``openhands.sdk.settings.ACPProviderInfo``. The backend
+ * serialises the SDK dataclass directly; only the fields the frontend
+ * actually reads are typed here.
+ */
+export interface ACPProviderInfo {
+  key: string;
+  display_name: string;
+  default_command: string[];
+}
+
 export interface WebClientConfig {
   app_mode: "saas" | "oss";
   posthog_client_key: string | null;
@@ -48,4 +60,5 @@ export interface WebClientConfig {
   gitlab_enabled?: boolean;
   provider_default_hosts?: Partial<Record<Provider, string>>;
   slack_enabled?: boolean;
+  acp_providers?: ACPProviderInfo[];
 }

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openhands.agent_server.env_parser import DiscriminatedUnionMixin
 from openhands.app_server.config_api.config_models import AppMode
@@ -9,6 +9,7 @@ from openhands.app_server.web_client.web_client_deployment_mode import (
     DeploymentMode,
     get_deployment_mode,
 )
+from openhands.sdk.settings import ACPProviderInfo
 
 
 class WebClientFeatureFlags(BaseModel):
@@ -32,13 +33,11 @@ class WebClientFeatureFlags(BaseModel):
         return self
 
 
-class ACPProviderConfig(BaseModel):
-    key: str
-    display_name: str
-    default_command: list[str]
-
-
 class WebClientConfig(DiscriminatedUnionMixin):
+    # ``ACPProviderInfo`` is a stdlib dataclass from the SDK — allow Pydantic
+    # to accept and serialise it without redefining the schema on this side.
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     app_mode: AppMode
     posthog_client_key: str | None
     feature_flags: WebClientFeatureFlags
@@ -53,4 +52,4 @@ class WebClientConfig(DiscriminatedUnionMixin):
     gitlab_enabled: bool = False
     provider_default_hosts: dict[str, str] = Field(default_factory=dict)
     slack_enabled: bool = False
-    acp_providers: list[ACPProviderConfig] = Field(default_factory=list)
+    acp_providers: list[ACPProviderInfo] = Field(default_factory=list)
