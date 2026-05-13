@@ -51,7 +51,6 @@ from openhands.app_server.user_auth.user_auth import (
     get_for_user as get_user_auth_for_user,
 )
 from openhands.sdk import ConversationExecutionStatus, Event
-from openhands.sdk.agent.acp_agent import ACPAgent
 from openhands.sdk.event import ConversationStateUpdateEvent
 
 router = APIRouter(prefix='/webhooks', tags=['Webhooks'])
@@ -335,14 +334,15 @@ async def on_conversation_update(
     # Trust the discriminated-union payload over any stored ``agent_kind``
     # on ``existing``: a webhook is always authoritative for the agent
     # currently running, and a drifted row (e.g. mid-migration data) must
-    # not lock us into the wrong branch.
+    # not lock us into the wrong branch. Branch on the ``agent_kind``
+    # discriminator (an ``AgentBase`` property) so we don't import a
+    # concrete SDK subclass just to do a kind check.
     agent = conversation_info.agent
-    if isinstance(agent, ACPAgent):
+    if agent.agent_kind == 'acp':
         agent_kind = 'acp'
         llm_model = None
     else:
-        # The discriminated union has two arms — Agent and ACPAgent — and
-        # ``AgentBase.llm: LLM`` is non-optional on both.
+        # ``AgentBase.llm: LLM`` is non-optional on both arms of the union.
         agent_kind = 'openhands'
         llm_model = agent.llm.model
 
