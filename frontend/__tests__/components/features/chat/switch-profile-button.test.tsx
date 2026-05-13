@@ -106,6 +106,23 @@ describe("SwitchProfileButton", () => {
     expect(screen.queryByTestId("switch-profile-button")).toBeNull();
   });
 
+  it("renders nothing while the conversation is still starting (task-id state)", () => {
+    // Regression guard: during the first ~3s of startup the URL holds a
+    // ``task-{id}`` placeholder and ``useActiveConversation`` skips its
+    // fetch, leaving ``data`` undefined. The button must stay hidden — a
+    // click in this state would POST to
+    // ``/app-conversations/task-{id}/switch_profile``, which 422s because
+    // the route expects a UUID. (Particularly visible for ACP users, who
+    // would otherwise see the LLM toggle briefly appear before the
+    // ``agent_kind === "acp"`` arm kicks in.)
+    mockUseLlmProfiles.mockReturnValue({
+      data: { profiles: PROFILES, active_profile: null },
+    });
+    mockUseActiveConversation.mockReturnValue({ data: undefined });
+    renderButton();
+    expect(screen.queryByTestId("switch-profile-button")).toBeNull();
+  });
+
   it("shows the matching profile name when conversation.llm_model maps to a profile", () => {
     setupHooks({ conversationModel: "openai/gpt-5" });
     renderButton();

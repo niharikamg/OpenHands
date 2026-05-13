@@ -28,11 +28,23 @@ export function SwitchProfileButton() {
     ? (profiles.find((p) => p.model === conversationModel)?.name ?? null)
     : (data?.active_profile ?? null);
 
+  // Wait for ``conversation`` to materialise before showing the toggle.
+  // During the first ~3s of conversation startup the URL still carries the
+  // transient ``task-{id}`` placeholder; ``useActiveConversation`` skips
+  // the fetch in that state, leaving ``conversation`` undefined. The
+  // ``agent_kind === "acp"`` check below short-circuits on undefined, so
+  // without this guard the button renders for ACP users during startup
+  // — and a click POSTs ``/app-conversations/task-{id}/switch_profile``,
+  // which 422s because the route expects a UUID.
+  if (!conversation) {
+    return null;
+  }
+
   // LLM profiles don't apply to ACP conversations: the sub-agent
   // (Claude Code / Codex / Gemini CLI) drives its own model selection,
   // and ``llm_model`` is intentionally null. Hide the toggle so the user
   // isn't shown a switch that has no effect.
-  if (conversation?.agent_kind === "acp") {
+  if (conversation.agent_kind === "acp") {
     return null;
   }
 
