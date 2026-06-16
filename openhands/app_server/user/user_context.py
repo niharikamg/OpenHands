@@ -20,6 +20,20 @@ class UserContext(ABC):
         """Get the user id"""
 
     @abstractmethod
+    async def get_user_email(self) -> str | None:
+        """Get the email for the current user, if available.
+
+        Returns the user's email address for attribution in observability
+        traces (e.g. Laminar). In SaaS/enterprise mode this is typically
+        the Keycloak email; in OSS mode or for admin-scoped contexts this
+        returns ``None`` so callers can fall back to the internal user id.
+
+        Note: this value is considered PII and may be forwarded to
+        third-party observability services. Treat it accordingly when
+        adding new callers.
+        """
+
+    @abstractmethod
     async def get_user_info(self) -> UserInfo:
         """Get the user info."""
 
@@ -62,6 +76,23 @@ class UserContext(ABC):
     @abstractmethod
     async def get_user_git_info(self) -> UserGitInfo | None:
         """Get an User Meta"""
+
+    async def get_max_concurrent_sandboxes(self, default: int = 10) -> int:
+        """Get the user's maximum concurrent sandboxes limit.
+
+        This method returns the effective limit for concurrent sandboxes for the user.
+        The resolution order is:
+        1. User-specific override (if set)
+        2. Organization default (if in enterprise/SaaS mode)
+        3. The provided default value (OSS mode fallback)
+
+        Args:
+            default: The fallback limit if no user/org-specific limit is set.
+
+        Returns:
+            The effective maximum number of concurrent sandboxes allowed.
+        """
+        return default
 
 
 class UserContextInjector(DiscriminatedUnionMixin, Injector[UserContext], ABC):

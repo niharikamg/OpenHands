@@ -10,12 +10,18 @@ import {
   TOAST_OPTIONS,
 } from "#/utils/custom-toast-handlers";
 import { useActiveConversation } from "#/hooks/query/use-active-conversation";
+import { useConversationLimitStore } from "#/stores/conversation-limit-store";
+import {
+  isConcurrencyLimitError,
+  getConcurrencyLimit,
+} from "#/utils/concurrency-limit-error";
 
 export const useNewConversationCommand = () => {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { data: conversation } = useActiveConversation();
+  const { showLimitModal } = useConversationLimitStore();
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -26,7 +32,9 @@ export const useNewConversationCommand = () => {
       // Fetch V1 conversation data to get llm_model (not available in legacy type)
       const v1Conversations =
         await V1ConversationService.batchGetAppConversations([conversation.id]);
-      const llmModel = v1Conversations?.[0]?.llm_model;
+      const v1Conversation = v1Conversations?.[0];
+      const llmModel =
+        v1Conversation?.agent_kind === "acp" ? null : v1Conversation?.llm_model;
 
       // Start a new conversation reusing the existing sandbox directly.
       // We pass sandbox_id instead of parent_conversation_id so that the
@@ -98,6 +106,12 @@ export const useNewConversationCommand = () => {
     },
     onError: (error) => {
       toast.dismiss("clear-conversation");
+
+      if (isConcurrencyLimitError(error)) {
+        showLimitModal(getConcurrencyLimit(error));
+        return;
+      }
+
       let clearError = t(I18nKey.CONVERSATION$CLEAR_UNKNOWN_ERROR);
       if (error instanceof Error) {
         clearError = error.message;

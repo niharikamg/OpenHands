@@ -11,9 +11,12 @@ This module tests the RemoteSandboxService implementation, focusing on:
 - Error handling for HTTP failures and edge cases
 """
 
+import asyncio
+from contextlib import ExitStack, asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -117,6 +120,7 @@ def create_stored_sandbox(
     spec_id: str = 'test-image:latest',
     created_at: datetime | None = None,
     session_api_key_hash: str | None = None,
+    is_paused: bool = False,
 ) -> StoredRemoteSandbox:
     """Helper function to create StoredRemoteSandbox for testing."""
     if created_at is None:
@@ -128,6 +132,7 @@ def create_stored_sandbox(
         sandbox_spec_id=spec_id,
         session_api_key_hash=session_api_key_hash,
         created_at=created_at,
+        is_paused=is_paused,
     )
 
 
@@ -394,6 +399,12 @@ class TestSandboxLifecycle:
         remote_sandbox_service.httpx_client.request.return_value = mock_response
         remote_sandbox_service.pause_old_sandboxes = AsyncMock(return_value=[])
 
+        # Mock concurrency limit methods
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=10
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=0)
+
         # Mock database operations
         remote_sandbox_service.db_session.add = MagicMock()
         remote_sandbox_service.db_session.commit = AsyncMock()
@@ -405,9 +416,6 @@ class TestSandboxLifecycle:
         # Verify
         assert sandbox_info.id == 'test-sandbox-123'
         assert sandbox_info.status == SandboxStatus.RUNNING
-        remote_sandbox_service.pause_old_sandboxes.assert_called_once_with(
-            9
-        )  # max_num_sandboxes - 1
         remote_sandbox_service.db_session.add.assert_called_once()
         remote_sandbox_service.db_session.commit.assert_not_called()
 
@@ -421,6 +429,13 @@ class TestSandboxLifecycle:
         mock_response.json.return_value = create_runtime_data()
         remote_sandbox_service.httpx_client.request.return_value = mock_response
         remote_sandbox_service.pause_old_sandboxes = AsyncMock(return_value=[])
+
+        # Mock concurrency limit methods
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=10
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=0)
+
         remote_sandbox_service.db_session.add = MagicMock()
         remote_sandbox_service.db_session.commit = AsyncMock()
 
@@ -442,6 +457,12 @@ class TestSandboxLifecycle:
         mock_sandbox_spec_service.get_sandbox_spec.return_value = None
         remote_sandbox_service.pause_old_sandboxes = AsyncMock(return_value=[])
 
+        # Mock concurrency limit methods
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=10
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=0)
+
         # Execute & Verify
         with pytest.raises(ValueError, match='Sandbox Spec not found'):
             await remote_sandbox_service.start_sandbox('non-existent-spec')
@@ -458,6 +479,12 @@ class TestSandboxLifecycle:
         )
         remote_sandbox_service.httpx_client.request.return_value = mock_response
         remote_sandbox_service.pause_old_sandboxes = AsyncMock(return_value=[])
+
+        # Mock concurrency limit methods
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=10
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=0)
 
         # Mock database operations
         remote_sandbox_service.db_session.add = MagicMock()
@@ -482,6 +509,13 @@ class TestSandboxLifecycle:
             'API Error'
         )
         remote_sandbox_service.pause_old_sandboxes = AsyncMock(return_value=[])
+
+        # Mock concurrency limit methods
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=10
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=0)
+
         remote_sandbox_service.db_session.add = MagicMock()
         remote_sandbox_service.db_session.commit = AsyncMock()
 
@@ -499,6 +533,13 @@ class TestSandboxLifecycle:
         mock_response.json.return_value = create_runtime_data()
         remote_sandbox_service.httpx_client.request.return_value = mock_response
         remote_sandbox_service.pause_old_sandboxes = AsyncMock(return_value=[])
+
+        # Mock concurrency limit methods
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=10
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=0)
+
         remote_sandbox_service.db_session.add = MagicMock()
         remote_sandbox_service.db_session.commit = AsyncMock()
 
@@ -1023,131 +1064,17 @@ class TestGetSandboxBySessionApiKey:
     async def test_get_sandbox_by_session_api_key_not_found(
         self, remote_sandbox_service
     ):
-        """Test finding sandbox when no matching hash exists and legacy fallback fails."""
-        # Setup - no hash match
-        mock_result_no_hash = MagicMock()
-        mock_result_no_hash.scalar_one_or_none.return_value = None
-
-        # Setup - legacy fallback: /list API fails, then no stored sandboxes
-        mock_response = MagicMock()
-        mock_response.raise_for_status.side_effect = Exception('API error')
-        remote_sandbox_service.httpx_client.request = AsyncMock(
-            return_value=mock_response
-        )
-
-        mock_result_legacy = MagicMock()
-        mock_result_legacy.scalars.return_value.all.return_value = []
-
-        remote_sandbox_service.db_session.execute = AsyncMock(
-            side_effect=[mock_result_no_hash, mock_result_legacy]
-        )
+        """Test that None is returned when no sandbox matches the session API key hash."""
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        remote_sandbox_service.db_session.execute = AsyncMock(return_value=mock_result)
         remote_sandbox_service.user_context.get_user_id.return_value = 'test-user-123'
 
-        # Execute
         result = await remote_sandbox_service.get_sandbox_by_session_api_key(
             'unknown-key'
         )
 
-        # Verify
         assert result is None
-
-    @pytest.mark.asyncio
-    async def test_get_sandbox_by_session_api_key_legacy_via_list_api(
-        self, remote_sandbox_service
-    ):
-        """Test legacy fallback finding sandbox via /list API and backfilling hash."""
-        from openhands.app_server.sandbox.remote_sandbox_service import (
-            _hash_session_api_key,
-        )
-
-        # Setup
-        session_api_key = 'test-session-key'
-        stored_sandbox = create_stored_sandbox(
-            session_api_key_hash=None
-        )  # Legacy sandbox
-        runtime_data = create_runtime_data(session_api_key=session_api_key)
-
-        # First call returns None (no hash match)
-        mock_result_no_match = MagicMock()
-        mock_result_no_match.scalar_one_or_none.return_value = None
-
-        # Legacy fallback: /list API returns the runtime
-        mock_response = MagicMock()
-        mock_response.raise_for_status.return_value = None
-        mock_response.json.return_value = {'runtimes': [runtime_data]}
-        remote_sandbox_service.httpx_client.request = AsyncMock(
-            return_value=mock_response
-        )
-
-        # Query for sandbox by session_id returns the stored sandbox
-        mock_result_sandbox = MagicMock()
-        mock_result_sandbox.scalar_one_or_none.return_value = stored_sandbox
-
-        remote_sandbox_service.db_session.execute = AsyncMock(
-            side_effect=[mock_result_no_match, mock_result_sandbox]
-        )
-        remote_sandbox_service.user_context.get_user_id.return_value = 'test-user-123'
-
-        # Execute
-        result = await remote_sandbox_service.get_sandbox_by_session_api_key(
-            session_api_key
-        )
-
-        # Verify
-        assert result is not None
-        assert result.id == 'test-sandbox-123'
-        # Verify the hash was backfilled
-        expected_hash = _hash_session_api_key(session_api_key)
-        assert stored_sandbox.session_api_key_hash == expected_hash
-
-    @pytest.mark.asyncio
-    async def test_get_sandbox_by_session_api_key_legacy_via_runtime_check(
-        self, remote_sandbox_service
-    ):
-        """Test legacy fallback checking each sandbox's runtime when /list API fails."""
-        from openhands.app_server.sandbox.remote_sandbox_service import (
-            _hash_session_api_key,
-        )
-
-        # Setup
-        session_api_key = 'test-session-key'
-        stored_sandbox = create_stored_sandbox(
-            session_api_key_hash=None
-        )  # Legacy sandbox
-        runtime_data = create_runtime_data(session_api_key=session_api_key)
-
-        # First call returns None (no hash match)
-        mock_result_no_match = MagicMock()
-        mock_result_no_match.scalar_one_or_none.return_value = None
-
-        # Legacy fallback: /list API fails
-        mock_response = MagicMock()
-        mock_response.raise_for_status.side_effect = Exception('API error')
-        remote_sandbox_service.httpx_client.request = AsyncMock(
-            return_value=mock_response
-        )
-
-        # Get all stored sandboxes returns the legacy sandbox
-        mock_result_all = MagicMock()
-        mock_result_all.scalars.return_value.all.return_value = [stored_sandbox]
-
-        remote_sandbox_service.db_session.execute = AsyncMock(
-            side_effect=[mock_result_no_match, mock_result_all]
-        )
-        remote_sandbox_service._get_runtime = AsyncMock(return_value=runtime_data)
-        remote_sandbox_service.user_context.get_user_id.return_value = 'test-user-123'
-
-        # Execute
-        result = await remote_sandbox_service.get_sandbox_by_session_api_key(
-            session_api_key
-        )
-
-        # Verify
-        assert result is not None
-        assert result.id == 'test-sandbox-123'
-        # Verify the hash was backfilled
-        expected_hash = _hash_session_api_key(session_api_key)
-        assert stored_sandbox.session_api_key_hash == expected_hash
 
     @pytest.mark.asyncio
     async def test_get_sandbox_by_session_api_key_runtime_error(
@@ -1266,3 +1193,664 @@ class TestConstants:
         """Test that environment variable constants are defined."""
         assert WEBHOOK_CALLBACK_VARIABLE == 'OH_WEBHOOKS_0_BASE_URL'
         assert ALLOW_CORS_ORIGINS_VARIABLE == 'OH_ALLOW_CORS_ORIGINS_0'
+
+
+class TestConcurrencyLimits:
+    """Test cases for sandbox concurrency limit enforcement.
+
+    Tests the _get_user_effective_sandbox_limit, _count_user_running_sandboxes,
+    and start_sandbox limit enforcement functionality.
+
+    NOTE: Tests involving enterprise storage modules (UserStore, OrgMemberStore,
+    OrgStore) are in enterprise/tests/unit/ since they require enterprise modules.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_effective_limit_delegates_to_user_context(
+        self, remote_sandbox_service
+    ):
+        """Test that _get_user_effective_sandbox_limit delegates to UserContext."""
+        remote_sandbox_service.user_context.get_max_concurrent_sandboxes = AsyncMock(
+            return_value=5
+        )
+
+        result = await remote_sandbox_service._get_user_effective_sandbox_limit()
+
+        assert result == 5
+        remote_sandbox_service.user_context.get_max_concurrent_sandboxes.assert_called_once_with(
+            10  # max_num_sandboxes passed as default
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_effective_limit_passes_max_num_sandboxes_as_default(
+        self, remote_sandbox_service
+    ):
+        """Test that _get_user_effective_sandbox_limit passes max_num_sandboxes as default.
+
+        The global fallback (max_num_sandboxes=10) is passed to UserContext,
+        which can use it as the default in OSS mode.
+        """
+        remote_sandbox_service.user_context.get_max_concurrent_sandboxes = AsyncMock(
+            return_value=10
+        )
+
+        result = await remote_sandbox_service._get_user_effective_sandbox_limit()
+
+        assert result == 10  # global fallback (max_num_sandboxes)
+
+    @pytest.mark.asyncio
+    async def test_count_running_sandboxes_returns_zero_when_no_db_records(
+        self, remote_sandbox_service
+    ):
+        """Test that _count_user_running_sandboxes returns 0 when user has no sandboxes."""
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = []
+        remote_sandbox_service.db_session.execute = AsyncMock(return_value=mock_result)
+
+        result = await remote_sandbox_service._count_user_running_sandboxes()
+
+        assert result == 0
+        # No runtime API call should be made
+        remote_sandbox_service.httpx_client.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_count_running_sandboxes_excludes_paused_sandboxes(
+        self, remote_sandbox_service
+    ):
+        """Test that _count_user_running_sandboxes only counts non-paused sandboxes."""
+        # DB returns 2 running sandboxes (is_paused=False) filtered by the query;
+        # paused sandboxes are excluded at the query level.
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [
+            create_stored_sandbox(sandbox_id='sandbox-1', is_paused=False),
+            create_stored_sandbox(sandbox_id='sandbox-2', is_paused=False),
+        ]
+        remote_sandbox_service.db_session.execute = AsyncMock(return_value=mock_result)
+
+        result = await remote_sandbox_service._count_user_running_sandboxes()
+
+        assert result == 2
+        # No runtime API call should be made
+        remote_sandbox_service.httpx_client.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_start_sandbox_raises_concurrency_error_when_at_limit(
+        self, remote_sandbox_service
+    ):
+        """Test that start_sandbox raises ConcurrencyLimitError when user is at limit."""
+        from openhands.app_server.errors import ConcurrencyLimitError
+
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=3
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=3)
+
+        with pytest.raises(ConcurrencyLimitError) as exc_info:
+            await remote_sandbox_service.start_sandbox()
+
+        assert exc_info.value.detail['limit'] == 3
+        assert exc_info.value.detail['current'] == 3
+        assert exc_info.value.status_code == 429
+
+    @pytest.mark.asyncio
+    async def test_start_sandbox_raises_concurrency_error_when_over_limit(
+        self, remote_sandbox_service
+    ):
+        """Test that start_sandbox raises ConcurrencyLimitError when user exceeds limit."""
+        from openhands.app_server.errors import ConcurrencyLimitError
+
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=5
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=7)
+
+        with pytest.raises(ConcurrencyLimitError) as exc_info:
+            await remote_sandbox_service.start_sandbox()
+
+        assert exc_info.value.detail['limit'] == 5
+        assert exc_info.value.detail['current'] == 7
+
+    @pytest.mark.asyncio
+    async def test_start_sandbox_allows_creation_when_under_limit(
+        self, remote_sandbox_service
+    ):
+        """Test that start_sandbox succeeds when user is under their limit."""
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=5
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=2)
+        remote_sandbox_service.pause_old_sandboxes = AsyncMock(return_value=[])
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            'session_id': 'new-sandbox-123',
+            'status': 'running',
+            'url': 'https://sandbox.example.com',
+            'session_api_key': 'test-key',
+            'runtime_id': 'runtime-456',
+        }
+        remote_sandbox_service.httpx_client.request = AsyncMock(
+            return_value=mock_response
+        )
+
+        result = await remote_sandbox_service.start_sandbox()
+
+        assert result is not None
+        assert result.id is not None
+
+    @pytest.mark.asyncio
+    async def test_start_sandbox_pauses_old_sandboxes_when_approaching_limit(
+        self, remote_sandbox_service
+    ):
+        """Test that start_sandbox calls pause_old_sandboxes when approaching limit."""
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=5
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=4)
+        remote_sandbox_service.pause_old_sandboxes = AsyncMock(return_value=[])
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            'session_id': 'new-sandbox-123',
+            'status': 'running',
+            'url': 'https://sandbox.example.com',
+            'session_api_key': 'test-key',
+            'runtime_id': 'runtime-456',
+        }
+        remote_sandbox_service.httpx_client.request = AsyncMock(
+            return_value=mock_response
+        )
+
+        await remote_sandbox_service.start_sandbox()
+
+        remote_sandbox_service.pause_old_sandboxes.assert_called_once_with(4)
+
+    @pytest.mark.asyncio
+    async def test_start_sandbox_does_not_pause_when_well_under_limit(
+        self, remote_sandbox_service
+    ):
+        """Test that start_sandbox does not pause sandboxes when well under limit."""
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=10
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=2)
+        remote_sandbox_service.pause_old_sandboxes = AsyncMock(return_value=[])
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            'session_id': 'new-sandbox-123',
+            'status': 'running',
+            'url': 'https://sandbox.example.com',
+            'session_api_key': 'test-key',
+            'runtime_id': 'runtime-456',
+        }
+        remote_sandbox_service.httpx_client.request = AsyncMock(
+            return_value=mock_response
+        )
+
+        await remote_sandbox_service.start_sandbox()
+
+        remote_sandbox_service.pause_old_sandboxes.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_start_sandbox_concurrency_error_not_wrapped_in_sandbox_error(
+        self, remote_sandbox_service
+    ):
+        """Test that ConcurrencyLimitError is raised directly, not wrapped in SandboxError."""
+        from openhands.app_server.errors import ConcurrencyLimitError
+
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=3
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=3)
+
+        with pytest.raises(ConcurrencyLimitError):
+            await remote_sandbox_service.start_sandbox()
+
+        # Verify it's not wrapped in SandboxError
+        try:
+            await remote_sandbox_service.start_sandbox()
+        except ConcurrencyLimitError:
+            pass  # Expected
+        except SandboxError:
+            pytest.fail('ConcurrencyLimitError should not be wrapped in SandboxError')
+
+    @pytest.mark.asyncio
+    async def test_check_concurrency_limit_raises_when_at_limit(
+        self, remote_sandbox_service
+    ):
+        """Test that check_concurrency_limit raises ConcurrencyLimitError when at limit."""
+        from openhands.app_server.errors import ConcurrencyLimitError
+
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=3
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=3)
+
+        with pytest.raises(ConcurrencyLimitError) as exc_info:
+            await remote_sandbox_service.check_concurrency_limit()
+
+        assert exc_info.value.detail['limit'] == 3
+        assert exc_info.value.detail['current'] == 3
+        assert exc_info.value.status_code == 429
+
+    @pytest.mark.asyncio
+    async def test_check_concurrency_limit_raises_when_over_limit(
+        self, remote_sandbox_service
+    ):
+        """Test that check_concurrency_limit raises ConcurrencyLimitError when over limit."""
+        from openhands.app_server.errors import ConcurrencyLimitError
+
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=5
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=7)
+
+        with pytest.raises(ConcurrencyLimitError) as exc_info:
+            await remote_sandbox_service.check_concurrency_limit()
+
+        assert exc_info.value.detail['limit'] == 5
+        assert exc_info.value.detail['current'] == 7
+
+    @pytest.mark.asyncio
+    async def test_check_concurrency_limit_succeeds_when_under_limit(
+        self, remote_sandbox_service
+    ):
+        """Test that check_concurrency_limit succeeds when under limit."""
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=5
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=2)
+
+        # Should not raise
+        await remote_sandbox_service.check_concurrency_limit()
+
+    @pytest.mark.asyncio
+    async def test_check_concurrency_limit_succeeds_when_well_under_limit(
+        self, remote_sandbox_service
+    ):
+        """Test that check_concurrency_limit succeeds when well under limit."""
+        remote_sandbox_service._get_user_effective_sandbox_limit = AsyncMock(
+            return_value=10
+        )
+        remote_sandbox_service._count_user_running_sandboxes = AsyncMock(return_value=0)
+
+        # Should not raise
+        await remote_sandbox_service.check_concurrency_limit()
+
+
+def _async_cm_factory(value):
+    """Return a callable that yields ``value`` as an async context manager.
+
+    Mirrors ``get_*_service(state)``, which is used as
+    ``async with get_x(state) as y``.
+    """
+
+    @asynccontextmanager
+    async def _cm(*args, **kwargs):
+        yield value
+
+    return _cm
+
+
+def _make_page(items, next_page_id=None):
+    """Build a minimal object satisfying the page_iterator protocol."""
+    page = MagicMock()
+    page.items = items
+    page.next_page_id = next_page_id
+    return page
+
+
+class _SessionTracker:
+    """Counts how many mocked DB sessions are open at any instant.
+
+    Used as the ``side_effect`` for a patched ``get_db_session``: every
+    ``async with get_db_session(state)`` increments ``open`` on enter and
+    decrements it on exit. Network-call probes record ``open`` at the moment
+    they fire, so the regression guard ``open == 0 during network I/O`` can be
+    asserted directly.
+    """
+
+    def __init__(self):
+        self.open = 0
+        self.enter_count = 0
+        self.max_open = 0
+
+    def __call__(self, *args, **kwargs):
+        tracker = self
+
+        class _Session:
+            async def __aenter__(self):
+                tracker.open += 1
+                tracker.enter_count += 1
+                tracker.max_open = max(tracker.max_open, tracker.open)
+                return MagicMock()
+
+            async def __aexit__(self, *exc):
+                tracker.open -= 1
+                return False
+
+        return _Session()
+
+
+class TestPollAgentServersSessionScoping:
+    """Test cases for DB session scoping in poll_agent_servers and refresh_conversation.
+
+    These tests verify that DB sessions are released before network I/O to
+    prevent 'idle in transaction' issues. The key invariant:
+
+    - No DB session/transaction is held open across an await'ed agent-server
+      network call.
+
+    A shared :class:`_SessionTracker` counts how many DB sessions are open at
+    any instant, and every mocked agent-server network call records the count
+    it observes. The regression guard is that this count is always ``0`` during
+    network I/O. The mocks deliberately drive the *real* poll/refresh code
+    paths (including the DB-write phases) so the assertions are not vacuous.
+    """
+
+    def _patches(
+        self,
+        tracker,
+        httpx_client,
+        conv_service,
+        event_service,
+        callback_service,
+        validated_conv,
+        event_pages,
+    ):
+        """Common patches shared by the tests in this class.
+
+        Returns a list of ``patch`` context managers. ``ConversationInfo`` and
+        ``EventPage`` validation is stubbed so the refresh code reaches its
+        DB-write phases without needing fully-formed agent-server payloads.
+        """
+        mock_conv_info = MagicMock()
+        mock_conv_info.model_validate.return_value = validated_conv
+        mock_event_page = MagicMock()
+        mock_event_page.model_validate.side_effect = list(event_pages)
+        return [
+            patch('openhands.app_server.config.get_db_session', side_effect=tracker),
+            patch(
+                'openhands.app_server.config.get_app_conversation_info_service',
+                side_effect=_async_cm_factory(conv_service),
+            ),
+            patch(
+                'openhands.app_server.config.get_event_service',
+                side_effect=_async_cm_factory(event_service),
+            ),
+            patch(
+                'openhands.app_server.config.get_event_callback_service',
+                side_effect=_async_cm_factory(callback_service),
+            ),
+            patch(
+                'openhands.app_server.config.get_httpx_client',
+                side_effect=_async_cm_factory(httpx_client),
+            ),
+            patch(
+                'openhands.app_server.sandbox.remote_sandbox_service.ConversationInfo',
+                mock_conv_info,
+            ),
+            patch(
+                'openhands.app_server.sandbox.remote_sandbox_service.EventPage',
+                mock_event_page,
+            ),
+            patch('openhands.app_server.sandbox.remote_sandbox_service.InjectorState'),
+            patch('openhands.app_server.sandbox.remote_sandbox_service.ADMIN'),
+            patch(
+                'openhands.app_server.sandbox.remote_sandbox_service.USER_CONTEXT_ATTR',
+                'user_context',
+            ),
+        ]
+
+    @staticmethod
+    def _validated_conv():
+        validated_conv = MagicMock()
+        validated_conv.updated_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        validated_conv.stats.get_combined_metrics.return_value = MagicMock()
+        return validated_conv
+
+    @staticmethod
+    def _app_conv(sandbox_id='sandbox-1'):
+        app_conv = MagicMock()
+        app_conv.id = MagicMock(hex='c0ffee')
+        app_conv.sandbox_id = sandbox_id
+        app_conv.metrics = None
+        return app_conv
+
+    @pytest.mark.asyncio
+    async def test_poll_agent_servers_releases_db_before_network_io(self):
+        """poll_agent_servers must release the read session before network I/O."""
+        from openhands.app_server.sandbox.remote_sandbox_service import (
+            poll_agent_servers,
+        )
+
+        tracker = _SessionTracker()
+        network_open_counts: list[int] = []
+
+        app_conv = self._app_conv()
+        list_payload = {
+            'runtimes': [
+                {
+                    'session_id': 'sandbox-1',
+                    'status': 'running',
+                    'url': 'https://sandbox.example.com',
+                    'session_api_key': 'key1',
+                }
+            ]
+        }
+
+        async def probe_get(url, *args, **kwargs):
+            # Record open DB sessions at the moment of every agent-server call.
+            network_open_counts.append(tracker.open)
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            if url.endswith('/list'):
+                resp.json.return_value = list_payload
+            else:
+                resp.json.return_value = {}
+            return resp
+
+        httpx_client = AsyncMock()
+        httpx_client.get.side_effect = probe_get
+
+        conv_service = AsyncMock()
+        conv_service.search_app_conversation_info = AsyncMock(
+            return_value=_make_page([app_conv])
+        )
+        conv_service.save_app_conversation_info = AsyncMock()
+        event_service = AsyncMock()
+        event_service.get_event = AsyncMock(return_value=None)
+        callback_service = AsyncMock()
+
+        patches = self._patches(
+            tracker,
+            httpx_client,
+            conv_service,
+            event_service,
+            callback_service,
+            self._validated_conv(),
+            event_pages=[_make_page([], None)],
+        )
+        with ExitStack() as stack:
+            for patch_cm in patches:
+                stack.enter_context(patch_cm)
+            task = asyncio.create_task(
+                poll_agent_servers(
+                    api_url='https://api.example.com',
+                    api_key='test-key',
+                    sleep_interval=3600,  # long, so cancellation ends the loop
+                )
+            )
+            await asyncio.sleep(0.1)
+            task.cancel()
+            await task  # poll swallows CancelledError and returns
+
+        # The runtime-list call and the per-conversation refresh both ran.
+        assert network_open_counts, 'expected agent-server network calls to fire'
+        assert len(network_open_counts) >= 2, (
+            'expected at least the /list call plus a conversation refresh, '
+            f'got {len(network_open_counts)} calls'
+        )
+        # Core regression guard: no DB session may be open during network I/O.
+        assert all(count == 0 for count in network_open_counts), (
+            'DB session held during network I/O (idle-in-transaction risk); '
+            f'observed open-session counts at network calls: {network_open_counts}'
+        )
+        # Non-vacuous: the read session (Phase 1) and a write session were used.
+        assert tracker.enter_count >= 2, (
+            'expected the read session plus at least one write session to open'
+        )
+        assert tracker.max_open >= 1, 'expected at least one DB session to open'
+        assert tracker.open == 0, 'all DB sessions must be released after polling'
+        conv_service.save_app_conversation_info.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_refresh_conversation_acquires_own_db_session(self):
+        """refresh_conversation must open its own short-lived write sessions."""
+        from openhands.app_server.sandbox.remote_sandbox_service import (
+            refresh_conversation,
+        )
+
+        tracker = _SessionTracker()
+        network_open_counts: list[int] = []
+
+        async def probe_get(url, *args, **kwargs):
+            network_open_counts.append(tracker.open)
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = {}
+            return resp
+
+        httpx_client = AsyncMock()
+        httpx_client.get.side_effect = probe_get
+
+        conv_service = AsyncMock()
+        conv_service.save_app_conversation_info = AsyncMock()
+        event_service = AsyncMock()
+        event_service.get_event = AsyncMock(return_value=None)
+        event_service.save_event = AsyncMock()
+        callback_service = AsyncMock()
+        callback_service.execute_callbacks = AsyncMock()
+
+        # One event on the first page, then an empty page to end pagination.
+        event = MagicMock()
+        event.id = str(uuid4())
+        event_pages = [_make_page([event], 'page-2'), _make_page([], None)]
+
+        patches = self._patches(
+            tracker,
+            httpx_client,
+            conv_service,
+            event_service,
+            callback_service,
+            self._validated_conv(),
+            event_pages=event_pages,
+        )
+        runtime = {
+            'url': 'https://sandbox.example.com',
+            'session_api_key': 'test-key',
+        }
+        with ExitStack() as stack:
+            for patch_cm in patches:
+                stack.enter_context(patch_cm)
+            await refresh_conversation(
+                app_conversation_info=self._app_conv(),
+                runtime=runtime,
+                httpx_client=httpx_client,
+            )
+
+        # The write paths actually ran (otherwise the assertions are vacuous).
+        conv_service.save_app_conversation_info.assert_awaited_once()
+        event_service.save_event.assert_awaited_once()
+        callback_service.execute_callbacks.assert_awaited_once()
+        # refresh_conversation opened its own sessions: one for the conversation
+        # save, one for the single new event.
+        assert tracker.enter_count >= 2, (
+            'refresh_conversation should acquire its own DB sessions for writes'
+        )
+        # Those sessions were short-lived and never overlapped network I/O.
+        assert all(count == 0 for count in network_open_counts), (
+            'DB session held during network I/O; observed open counts: '
+            f'{network_open_counts}'
+        )
+        assert tracker.open == 0, 'all DB sessions must be released afterwards'
+
+    @pytest.mark.asyncio
+    async def test_db_session_not_held_across_network_call(self):
+        """The key regression test: no DB session is open during a network call.
+
+        Uses an artificial network delay so a held session would visibly span
+        the await; the open-session count is sampled inside that window.
+        """
+        from openhands.app_server.sandbox.remote_sandbox_service import (
+            refresh_conversation,
+        )
+
+        tracker = _SessionTracker()
+        open_counts_during_network: list[int] = []
+
+        async def slow_get(url, *args, **kwargs):
+            # Sample the open-session count while the "network call" is mid-flight.
+            await asyncio.sleep(0.01)
+            open_counts_during_network.append(tracker.open)
+            await asyncio.sleep(0.01)
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = {}
+            return resp
+
+        httpx_client = AsyncMock()
+        httpx_client.get.side_effect = slow_get
+
+        conv_service = AsyncMock()
+        conv_service.save_app_conversation_info = AsyncMock()
+        event_service = AsyncMock()
+        event_service.get_event = AsyncMock(return_value=None)
+        event_service.save_event = AsyncMock()
+        callback_service = AsyncMock()
+        callback_service.execute_callbacks = AsyncMock()
+
+        event = MagicMock()
+        event.id = str(uuid4())
+        event_pages = [_make_page([event], 'page-2'), _make_page([], None)]
+
+        patches = self._patches(
+            tracker,
+            httpx_client,
+            conv_service,
+            event_service,
+            callback_service,
+            self._validated_conv(),
+            event_pages=event_pages,
+        )
+        runtime = {
+            'url': 'https://sandbox.example.com',
+            'session_api_key': 'test-key',
+        }
+        with ExitStack() as stack:
+            for patch_cm in patches:
+                stack.enter_context(patch_cm)
+            await refresh_conversation(
+                app_conversation_info=self._app_conv(),
+                runtime=runtime,
+                httpx_client=httpx_client,
+            )
+
+        # The conversation fetch and at least one events fetch happened...
+        assert len(open_counts_during_network) >= 2, (
+            'expected the conversation fetch and an events fetch'
+        )
+        # ...and no DB session was open during any of them.
+        assert all(count == 0 for count in open_counts_during_network), (
+            'DB session must NOT be active during network I/O to prevent '
+            f"'idle in transaction' issues; observed: {open_counts_during_network}"
+        )
+        # Non-vacuous: a write session really did open at some point.
+        assert tracker.max_open >= 1, (
+            'expected refresh_conversation to open a write session'
+        )
+        assert tracker.open == 0

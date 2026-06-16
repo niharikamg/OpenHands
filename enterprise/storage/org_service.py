@@ -7,7 +7,12 @@ from typing import NoReturn
 from uuid import UUID, uuid4
 from uuid import UUID as parse_uuid
 
-from server.constants import ORG_SETTINGS_VERSION, get_default_litellm_model
+from server.constants import (
+    DEFAULT_COMMERCIAL_ORG_CONCURRENT_SANDBOXES,
+    ORG_SETTINGS_VERSION,
+    get_default_llm_base_url,
+    get_default_llm_model,
+)
 from server.routes.org_models import (
     LiteLLMIntegrationError,
     OrgAuthorizationError,
@@ -15,6 +20,7 @@ from server.routes.org_models import (
     OrgNameExistsError,
     OrgNotFoundError,
     OrgUpdate,
+    OrphanedUserError,
 )
 from storage.lite_llm_manager import LiteLlmManager
 from storage.org import Org
@@ -26,7 +32,7 @@ from storage.user_store import UserStore
 
 from openhands.app_server.settings.settings_models import Settings
 from openhands.app_server.utils.logger import openhands_logger as logger
-from openhands.sdk.settings import AgentSettings, ConversationSettings
+from openhands.sdk.settings import ConversationSettings, default_agent_settings
 
 
 class OrgService:
@@ -108,16 +114,18 @@ class OrgService:
         Returns:
             Org: New organization entity (not yet persisted)
         """
-        default_agent_settings = AgentSettings()
-        default_agent_settings.llm.model = get_default_litellm_model()
+        agent_settings = default_agent_settings()
+        agent_settings.llm.model = get_default_llm_model()
+        agent_settings.llm.base_url = get_default_llm_base_url()
         return Org(
             id=org_id,
             name=name,
             contact_name=contact_name,
             contact_email=contact_email,
             org_version=ORG_SETTINGS_VERSION,
-            agent_settings=default_agent_settings,
+            agent_settings=agent_settings,
             conversation_settings=ConversationSettings(),
+            max_concurrent_sandboxes=DEFAULT_COMMERCIAL_ORG_CONCURRENT_SANDBOXES,
         )
 
     @staticmethod
@@ -794,7 +802,9 @@ class OrgService:
 
         # Step 2: Perform database cascade deletion with LiteLLM cleanup in transaction
         try:
-            deleted_org = await OrgStore.delete_org_cascade(org_id)
+            deleted_org = await OrgStore.delete_org_cascade(
+                org_id, requester_user_id=user_id
+            )
             if not deleted_org:
                 # This shouldn't happen since we verified existence above
                 raise OrgDatabaseError('Organization not found during deletion')
@@ -810,6 +820,11 @@ class OrgService:
 
             return deleted_org
 
+        except OrphanedUserError:
+            # Propagate as-is so the route can return a 400 with the affected
+            # user list. Wrapping into OrgDatabaseError below would mask the
+            # specific failure mode and force a 500.
+            raise
         except Exception as e:
             logger.error(
                 'Organization deletion failed',
@@ -842,7 +857,15 @@ class OrgService:
         if not org:
             return False
 
-        return org.byor_export_enabled
+        if org.byor_export_enabled:
+            return True
+
+        credits = await OrgService.get_org_credits(user_id, org_id)
+        if credits is None or credits <= 0:
+            return False
+
+        org = await OrgStore.enable_byor_export(org_id)
+        return bool(org and org.byor_export_enabled)
 
     @staticmethod
     async def switch_org(user_id: str, org_id: UUID) -> Org:

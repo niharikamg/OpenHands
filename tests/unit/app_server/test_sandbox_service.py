@@ -16,6 +16,7 @@ import pytest
 from openhands.app_server.sandbox.sandbox_models import (
     SandboxInfo,
     SandboxPage,
+    SandboxRecord,
     SandboxStatus,
 )
 from openhands.app_server.sandbox.sandbox_service import SandboxService
@@ -28,6 +29,7 @@ class MockSandboxService(SandboxService):
         self.search_sandboxes_mock = AsyncMock()
         self.get_sandbox_mock = AsyncMock()
         self.get_sandbox_by_session_api_key_mock = AsyncMock()
+        self.get_sandbox_record_by_session_api_key_mock = AsyncMock()
         self.start_sandbox_mock = AsyncMock()
         self.resume_sandbox_mock = AsyncMock()
         self.pause_sandbox_mock = AsyncMock()
@@ -45,6 +47,11 @@ class MockSandboxService(SandboxService):
         self, session_api_key: str
     ) -> SandboxInfo | None:
         return await self.get_sandbox_by_session_api_key_mock(session_api_key)
+
+    async def get_sandbox_record_by_session_api_key(
+        self, session_api_key: str
+    ) -> SandboxRecord | None:
+        return await self.get_sandbox_record_by_session_api_key_mock(session_api_key)
 
     async def start_sandbox(
         self, sandbox_spec_id: str | None = None, sandbox_id: str | None = None
@@ -359,3 +366,35 @@ class TestCleanupOldSandboxes:
         # Verify: No sandboxes should be stopped
         assert result == []
         mock_sandbox_service.pause_sandbox_mock.assert_not_called()
+
+
+class TestCheckConcurrencyLimit:
+    """Test cases for the check_concurrency_limit method."""
+
+    @pytest.mark.asyncio
+    async def test_check_concurrency_limit_default_does_nothing(
+        self, mock_sandbox_service
+    ):
+        """Test that default check_concurrency_limit implementation does nothing.
+
+        The base SandboxService class provides a default no-op implementation
+        that subclasses can override to implement limit checking.
+        """
+        # Execute - should not raise
+        await mock_sandbox_service.check_concurrency_limit()
+
+    @pytest.mark.asyncio
+    async def test_check_concurrency_limit_returns_none(self, mock_sandbox_service):
+        """Test that default check_concurrency_limit returns None (implicitly)."""
+        result = await mock_sandbox_service.check_concurrency_limit()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_check_concurrency_limit_can_be_called_multiple_times(
+        self, mock_sandbox_service
+    ):
+        """Test that check_concurrency_limit can be called multiple times safely."""
+        # Should not raise on any call
+        await mock_sandbox_service.check_concurrency_limit()
+        await mock_sandbox_service.check_concurrency_limit()
+        await mock_sandbox_service.check_concurrency_limit()
